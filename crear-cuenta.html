@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crear Cuenta - Registro Congreso</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+
+    <!-- Congress Banner -->
+    <img src="images/banner.jpg" alt="3o Congreso de Ciencias Exactas e Ingenierías" class="congress-banner">
+
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+    </div>
+
+    <div class="container" style="max-width: 600px;">
+
+        <div style="text-align: right; margin-bottom: 20px;">
+            <a href="index.html"
+                style="background: white; padding: 10px 20px; border-radius: 8px; font-weight: 600; color: var(--primary-color); text-decoration: none; box-shadow: var(--shadow-sm); display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s;">
+                <i class="fa-solid fa-arrow-right-to-bracket"></i> ¿Ya tienes una cuenta? Inicia Sesión
+            </a>
+        </div>
+
+        <form id="accountForm">
+            <section class="card">
+                <div class="card-header">
+                    <i class="fa-solid fa-user-lock"></i>
+                    <h2>Crear Cuenta</h2>
+                </div>
+                <div class="card-body">
+                    <p class="info-text">Estos datos te permitirán acceder al portal una vez registrado. Tu correo y
+                        teléfono serán usados como métodos de recuperación de contraseña.</p>
+
+                    <div class="form-group">
+                        <label for="email">Email (Usuario) *</label>
+                        <input type="email" id="email" name="email" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cellphone">Teléfono (Recuperación)</label>
+                        <input type="tel" id="cellphone" name="cellphone">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="regPassword">Contraseña *</label>
+                        <input type="password" id="regPassword" name="regPassword" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="repeatPassword">Repetir Contraseña *</label>
+                        <input type="password" id="repeatPassword" name="repeatPassword" required>
+                    </div>
+
+                    <button type="submit" class="submit-btn" style="margin-top: 20px;">
+                        Guardar y Continuar <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                </div>
+            </section>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('accountForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const cellphone = document.getElementById('cellphone').value;
+            const pwd = document.getElementById('regPassword').value;
+            const repwd = document.getElementById('repeatPassword').value;
+
+            if (pwd !== repwd) {
+                alert('Las contraseñas no coinciden. Por favor, asegúrate de que sean iguales.');
+                return;
+            }
+
+            const submitBtn = e.target.querySelector('button');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creando cuenta...';
+
+            try {
+                const response = await fetch('php/api.php?action=register_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password: pwd, cellphone })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    // Guardar datos en localStorage para la sesión actual
+                    localStorage.setItem('tempAccount', JSON.stringify({ email, cellphone }));
+                    alert('¡Cuenta creada con éxito! Ahora puedes completar tu registro.');
+                    window.location.href = 'registro.html';
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ocurrió un error al conectar con el servidor.');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalText;
+            }
+        });
+
+    </script>
+</body>
+
+</html>

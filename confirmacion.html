@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro Exitoso - Congreso GenCEI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .success-card {
+            text-align: center;
+            padding: 40px;
+            max-width: 600px;
+            margin: 40px auto;
+        }
+
+        .success-icon {
+            font-size: 80px;
+            color: #10b981;
+            margin-bottom: 20px;
+        }
+
+        .folio-badge {
+            background: #f0fdf4;
+            color: #166534;
+            padding: 10px 20px;
+            border-radius: 99px;
+            font-family: monospace;
+            font-size: 1.2rem;
+            font-weight: 700;
+            display: inline-block;
+            margin: 20px 0;
+            border: 2px dashed #166534;
+        }
+
+        .summary-details {
+            text-align: left;
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 25px;
+        }
+
+        .summary-details p {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .summary-details span:first-child {
+            font-weight: 600;
+            color: #4b5563;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Congress Banner -->
+    <img src="images/banner.jpg" alt="3o Congreso de Ciencias Exactas e Ingenierías" class="congress-banner">
+
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+    </div>
+
+    <div class="container">
+        <section class="card success-card">
+            <div class="success-icon">
+                <i class="fa-solid fa-circle-check"></i>
+            </div>
+            <h1>¡Registro Exitoso!</h1>
+            <p>Tu solicitud ha sido procesada correctamente en nuestro sistema.</p>
+
+            <div class="folio-badge" id="folioDisplay">CONCEI-2026-XXXX</div>
+
+            <div class="summary-details">
+                <p><span>Nombre:</span> <span id="nameDisplay">---</span></p>
+                <p><span>Correo (Usuario):</span> <span id="emailDisplay">---</span></p>
+                <p><span>Total Registrado:</span> <span id="totalDisplay">---</span></p>
+                <p><span>Fecha de Registro:</span> <span id="dateDisplay">---</span></p>
+            </div>
+
+            <div style="margin-top: 30px; display: flex; gap: 15px; justify-content: center;">
+                <a href="index.html" class="submit-btn"
+                    style="text-decoration: none; background-color: var(--primary-color);">
+                    <i class="fa-solid fa-house"></i> Ir al Inicio
+                </a>
+                <button onclick="window.print()" class="submit-btn"
+                    style="text-decoration: none; background-color: #6b7280;">
+                    <i class="fa-solid fa-print"></i> Imprimir Comprobante
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const data = JSON.parse(localStorage.getItem('lastRegistration') || '{}');
+
+            if (data.fullName) {
+                document.getElementById('nameDisplay').textContent = data.fullName;
+                document.getElementById('emailDisplay').textContent = data.email;
+                document.getElementById('totalDisplay').textContent = data.total;
+                document.getElementById('dateDisplay').textContent = data.date;
+                document.getElementById('folioDisplay').textContent = data.folio;
+            } else {
+                // Si no hay datos, probablemente el usuario entró directamente
+                window.location.href = 'crear-cuenta.html';
+            }
+        });
+    </script>
+</body>
+
+</html>
