@@ -28,12 +28,13 @@
             width: 260px;
             background: var(--admin-sidebar);
             color: white;
-            padding: 30px 0;
+            padding: 25px 0 10px 0;
             display: flex;
             flex-direction: column;
             position: fixed;
             height: 100vh;
             z-index: 100;
+            box-sizing: border-box;
         }
 
         .sidebar-header {
@@ -122,11 +123,13 @@
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
             font-size: 0.95rem;
+            vertical-align: top;
         }
 
         .actions {
             display: flex;
             gap: 10px;
+            align-items: flex-start;
         }
 
         .btn-icon {
@@ -265,6 +268,11 @@
             color: #991b1b;
         }
 
+        .status-pill-info {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
         @media (max-width: 900px) {
             .sidebar {
                 width: 70px;
@@ -320,6 +328,18 @@
             50% { transform: scale(1.15); }
             100% { transform: scale(1); }
         }
+
+        /* Estilos para el modal de detalle del usuario */
+        .detail-tab-btn.active {
+            color: var(--primary-color) !important;
+            border-bottom: 3px solid var(--primary-color) !important;
+            background: white !important;
+        }
+        
+        .detail-tab-btn:hover {
+            color: var(--primary-color) !important;
+            background: #f8fafc;
+        }
     </style>
 </head>
 
@@ -329,7 +349,11 @@
             <h2 style="font-size: 1.2rem; font-weight: 700;">ConCEI Admin</h2>
         </div>
         <div class="sidebar-menu">
-            <div class="menu-item active" data-type="workshop">
+            <div class="menu-item active" data-type="registrations">
+                <i class="fa-solid fa-users"></i>
+                <span>Usuarios Registrados</span>
+            </div>
+            <div class="menu-item" data-type="workshop">
                 <i class="fa-solid fa-puzzle-piece"></i>
                 <span>Talleres</span>
             </div>
@@ -341,9 +365,9 @@
                 <i class="fa-solid fa-barcode"></i>
                 <span>Códigos de Registro</span>
             </div>
-            <div class="menu-item" data-type="registrations">
-                <i class="fa-solid fa-users"></i>
-                <span>Usuarios Registrados</span>
+            <div class="menu-item" data-type="admins">
+                <i class="fa-solid fa-user-shield"></i>
+                <span>Administradores</span>
             </div>
         </div>
         <a href="#" class="logout-btn" id="logoutBtn">
@@ -355,14 +379,30 @@
     <div class="main-content">
         <div class="dashboard-header">
             <div>
-                <h1 id="pageTitle">Gestión de Talleres</h1>
-                <p id="pageDescription" style="color: var(--text-light); margin-top: 5px;">Administra los talleres
-                    disponibles para el
-                    registro.</p>
+                <h1 id="pageTitle">Usuarios Registrados</h1>
+                <p id="pageDescription" style="color: var(--text-light); margin-top: 5px;">Gestiona los registros, valida pagos y actualiza el estatus de los usuarios.</p>
             </div>
-            <button class="btn-add" id="openModalBtn">
-                <i class="fa-solid fa-plus"></i> Agregar Nuevo
-            </button>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button class="btn-add" id="downloadSvgBtn" style="display: none; background: #0f766e;">
+                    <i class="fa-solid fa-file-csv"></i> Descargar CSV
+                </button>
+                <button class="btn-add" id="toggleActiveBtn" style="display: none; background: #475569;">
+                    <i class="fa-solid fa-power-off"></i> Desactivar Todos
+                </button>
+                <button class="btn-add" id="openModalBtn" style="display: none;">
+                    <i class="fa-solid fa-plus"></i> Agregar Nuevo
+                </button>
+            </div>
+        </div>
+
+        <div id="searchBarWrapper" style="display:none; margin-bottom: 16px;">
+            <div style="position:relative; max-width: 380px;">
+                <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#94a3b8; font-size:0.9rem;"></i>
+                <input type="text" id="regSearchInput" placeholder="Buscar por nombre o ID de concepto..."
+                    style="width:100%; padding:10px 12px 10px 36px; border:1px solid #e2e8f0; border-radius:8px; font-size:0.9rem; font-family:inherit; box-sizing:border-box; outline:none; transition:border 0.2s;"
+                    onfocus="this.style.borderColor='var(--primary-color)'"
+                    onblur="this.style.borderColor='#e2e8f0'">
+            </div>
         </div>
 
         <div class="data-card">
@@ -495,7 +535,168 @@
         </div>
     </div>
 
-    <script src="js/admin_v2.js?v=1"></script>
+    <!-- Modal de Detalle Completo de Usuario (Premium) -->
+    <div id="userDetailModal" class="modal">
+        <div class="modal-content" style="max-width: 800px; width: 90%; margin: 2% auto; border-radius: 16px; box-shadow: var(--shadow-lg); border: none; overflow: hidden; display: flex; flex-direction: column; max-height: 90vh;">
+            <div class="modal-header" style="background: linear-gradient(135deg, var(--admin-sidebar) 0%, #0f172a 100%); padding: 25px 30px; border-bottom: none; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <span id="detailUserFolio" style="background: rgba(255,255,255,0.15); color: #38bdf8; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; font-weight: 700; letter-spacing: 1px; display: inline-block; margin-bottom: 8px;">FOLIO</span>
+                    <h3 id="detailUserName" style="margin: 0; font-size: 1.5rem; font-weight: 700; color: white;">Nombre del Usuario</h3>
+                </div>
+                <span class="close" onclick="closeUserDetailModal()" style="cursor: pointer; font-size: 1.8rem; color: rgba(255,255,255,0.7); transition: color 0.2s;">&times;</span>
+            </div>
+            
+            <!-- Tabs Menu -->
+            <div style="background: #f1f5f9; display: flex; border-bottom: 1px solid var(--border-color); padding: 0 20px;">
+                <button class="detail-tab-btn active" onclick="switchDetailTab('personal')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-user"></i> Datos Personales</button>
+                <button class="detail-tab-btn" onclick="switchDetailTab('payment')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-file-invoice-dollar"></i> Documentos y Pago</button>
+                <button class="detail-tab-btn" onclick="switchDetailTab('workshops')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-graduation-cap"></i> Talleres y Visitas</button>
+                <button class="detail-tab-btn" onclick="switchDetailTab('billing')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-file-invoice"></i> Facturación y Artículos</button>
+            </div>
+
+            <div class="modal-body" style="padding: 30px; overflow-y: auto; flex-grow: 1; background: #fafafa;">
+                <!-- TAB 1: PERSONAL -->
+                <div id="tab-personal" class="detail-tab-content">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Nombre Completo</small>
+                            <span id="det-fullname" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Correo Electrónico</small>
+                            <span id="det-email" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Teléfono</small>
+                            <span id="det-phone" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); grid-column: span 2;">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Institución / Universidad</small>
+                            <span id="det-institution" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Ciudad</small>
+                            <span id="det-city" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Estado y País</small>
+                            <span id="det-location" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: DOCUMENTS AND PAYMENT -->
+                <div id="tab-payment" class="detail-tab-content" style="display: none;">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 25px;">
+                        <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Tipo de Registro</small>
+                            <span id="det-regtype" style="font-weight: 600; font-size: 1.1rem; color: #1e293b;">N/A</span>
+                        </div>
+                    </div>
+
+                    <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-receipt"></i> Historial de Conceptos Generados</h4>
+                    <div id="det-conceptos-historial" style="display:flex; flex-direction:column; gap:8px; margin-bottom: 25px;">
+                        <!-- Historial de conceptos -->
+                    </div>
+
+                    <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-folder-open"></i> Documentos Cargados</h4>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;" id="det-documents-container">
+                        <!-- Links a documentos -->
+                    </div>
+                </div>
+
+                <!-- TAB 3: WORKSHOPS AND VISITS -->
+                <div id="tab-workshops" class="detail-tab-content" style="display: none;">
+                    <div style="margin-bottom: 25px;">
+                        <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-puzzle-piece"></i> Talleres Registrados</h4>
+                        <div id="det-workshops-list" style="display: flex; flex-direction: column; gap: 12px;">
+                            <!-- Talleres -->
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-industry"></i> Visitas Industriales Registradas</h4>
+                        <div id="det-visits-list" style="display: flex; flex-direction: column; gap: 12px;">
+                            <!-- Visitas -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 4: BILLING AND ARTICLES -->
+                <div id="tab-billing" class="detail-tab-content" style="display: none;">
+                    <div id="det-billing-section" style="margin-bottom: 25px;">
+                        <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-file-invoice"></i> Datos de Facturación</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; background: white; padding: 20px; border-radius: 8px; border: 1px solid var(--border-color);">
+                            <div>
+                                <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Razón Social</small>
+                                <span id="det-bill-razon" style="font-weight: 600;">N/A</span>
+                            </div>
+                            <div>
+                                <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">RFC</small>
+                                <span id="det-bill-rfc" style="font-weight: 600; color: #0284c7;">N/A</span>
+                            </div>
+                            <div style="grid-column: span 2;">
+                                <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Dirección Fiscal</small>
+                                <span id="det-bill-dir" style="font-weight: 600;">N/A</span>
+                            </div>
+                            <div>
+                                <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Código Postal / Ciudad</small>
+                                <span id="det-bill-cp-ciudad" style="font-weight: 600;">N/A</span>
+                            </div>
+                            <div>
+                                <small style="color: #64748b; font-weight: 600; display:block; margin-bottom: 4px;">Correo Factura</small>
+                                <span id="det-bill-email" style="font-weight: 600;">N/A</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="det-contribs-section">
+                        <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-book"></i> Artículos / Ponencias de Autor</h4>
+                        <div id="det-contribs-list" style="display: flex; flex-direction: column; gap: 12px;">
+                            <!-- Contribuciones -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="padding: 20px 30px; border-top: 1px solid var(--border-color); background: #f8fafc; display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
+                <span id="detailRegStatusLabel" style="margin-right: auto; font-weight: 700;"></span>
+                <button class="btn-save" id="btnDetailAccept" style="background: #10b981; padding: 10px 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; cursor: pointer;"><i class="fa-solid fa-folder-open"></i> Revisar Documentos</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Revisión de Documentos -->
+    <div id="docReviewModal" class="modal" style="z-index: 1100;">
+        <div class="modal-content" style="max-width: 860px; width: 95%; margin: 2% auto; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; max-height: 94vh;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); padding: 22px 30px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                <div>
+                    <p style="margin:0 0 4px 0; font-size:0.8rem; color:rgba(255,255,255,0.5); letter-spacing:1px; text-transform:uppercase;">Revisión de Documentos</p>
+                    <h3 id="docReviewTitle" style="margin:0; color:white; font-size:1.3rem; font-weight:700;">Nombre del Usuario</h3>
+                </div>
+                <div style="display:flex; align-items:center; gap:16px;">
+                    <div id="docReviewProgress" style="text-align:right;">
+                        <span id="docReviewCount" style="font-size:1.5rem; font-weight:800; color:#34d399;">0/0</span>
+                        <small style="display:block; color:rgba(255,255,255,0.5); font-size:0.75rem;">docs aceptados</small>
+                    </div>
+                    <span onclick="closeDocReviewModal()" style="cursor:pointer; font-size:1.8rem; color:rgba(255,255,255,0.6);">&times;</span>
+                </div>
+            </div>
+
+            <div id="docReviewBody" style="overflow-y:auto; flex-grow:1; padding:24px; background:#f8fafc; display:flex; flex-direction:column; gap:16px;">
+                <!-- Generado dinámicamente -->
+            </div>
+
+            <div style="padding:18px 28px; border-top:1px solid #e2e8f0; background:white; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+                <button onclick="closeDocReviewModal()" style="padding:10px 22px; border:none; border-radius:8px; background:#e2e8f0; color:#475569; font-weight:600; cursor:pointer;">Cerrar</button>
+                <button id="btnFinalizarRevision" disabled style="padding:10px 24px; border:none; border-radius:8px; background:#10b981; color:white; font-weight:700; cursor:not-allowed; opacity:0.5; display:flex; align-items:center; gap:8px; transition:all 0.2s;">
+                    <i class="fa-solid fa-circle-check"></i> Confirmar Aceptación Total
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/admin_v2.js?v=24"></script>
 </body>
 
 </html>

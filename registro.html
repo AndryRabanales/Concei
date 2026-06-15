@@ -174,7 +174,7 @@
                             para autores)</span></h2>
                 </div>
                 <div class="card-body">
-                    <p class="info-text">Puede registrar hasta 3 contribuciones (Artículos o Pósters).</p>
+                    <p class="info-text">Puede registrar hasta 2 contribuciones (Artículos o Pósters).</p>
 
                     <div id="contributionsContainer">
                         <!-- Items will be added here by JS -->
@@ -206,7 +206,7 @@
                                         Transactions <span
                                             style="font-weight: 400; color: #6b7280; font-size: 0.9rem;">(Requiere
                                             un
-                                            pago de $250 USD después de aceptación)</span></span>
+                                            pago de $250 USD después de aceptación por la revista)</span></span>
                                 </div>
                             </label>
                             <label class="reg-option" style="padding: 12px;">
@@ -307,12 +307,15 @@
 
                     <div id="billingForm" class="billing-form hidden">
                         <div class="form-group">
-                            <label for="razonSocial">Razón Social *</label>
-                            <input type="text" id="razonSocial" name="razonSocial">
+                            <label for="rfc">RFC *</label>
+                            <input type="text" id="rfc" name="rfc" placeholder="Escriba su RFC">
+                            <div id="rfcUadyWarning" class="hidden" style="color: #b91c1c; font-weight: bold; font-size: 0.85rem; margin-top: 5px; background: #fee2e2; border: 1px solid #fca5a5; padding: 10px; border-radius: 8px;">
+                                <i class="fa-solid fa-triangle-exclamation"></i> ¡Atención! No se emiten facturas a nombre de la universidad.
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label for="rfc">RFC *</label>
-                            <input type="text" id="rfc" name="rfc">
+                            <label for="razonSocial">Razón Social *</label>
+                            <input type="text" id="razonSocial" name="razonSocial" placeholder="Escriba su Razón Social">
                         </div>
                         <div class="form-group">
                             <label for="billingAddress">Dirección Fiscal *</label>
@@ -402,14 +405,19 @@
                                     </div>
                                 </div>
                                 <div style="margin-top: 20px;">
-                                    <label for="paymentProof" class="file-upload-label"
-                                        style="font-weight: 600; color: #1e40af;">Subir Comprobante de Pago *</label>
-                                    <input type="file" id="paymentProof" name="paymentProof" accept="image/*,.pdf"
-                                        class="file-input">
-                                    <p class="info-text-blue">
-                                        Por favor suba su ticket o captura de transferencia legible.
+                                    <label for="paymentProof" class="file-upload-label" style="font-weight: 600; color: #1e40af;">
+                                        Subir Comprobante de Pago *
+                                    </label>
+                                    <input type="file" id="paymentProof" name="paymentProof" accept="image/*,.pdf" class="file-input">
+                                    <p class="info-text-blue" style="margin-top: 5px; font-weight: bold; color: #dc2626; font-size: 0.85rem;">
+                                        <i class="fa-solid fa-circle-exclamation"></i> NOTA: PARA AGILIZAR LA VALIDACIÓN DEL PAGO, SUBIR PREFERENTEMENTE EL COMPROBANTE DE PAGO SPEI DE BANXICO.
                                     </p>
                                 </div>
+                            </div>
+                            <div id="noPaymentMessage" class="hidden" style="padding:20px;background:#f0fdf4;border:1px solid #86efac;border-radius:12px;text-align:center;">
+                                <i class="fa-solid fa-circle-check" style="font-size:1.8rem;color:#15803d;"></i>
+                                <p style="margin:10px 0 0;font-weight:700;color:#15803d;font-size:1.05rem;">Tu registro es gratuito</p>
+                                <p style="margin:6px 0 0;color:#166534;font-size:0.9rem;">No necesitas realizar ningún pago ni subir comprobante. Solo finaliza tu registro.</p>
                             </div>
                         </div>
                     </div>
@@ -431,7 +439,7 @@
 
 
         </form>
-    </div>
+    </div
 
     <!-- Workshop Info Modal -->
     <div id="infoModal" class="modal-overlay hidden">
@@ -453,7 +461,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="js/app.js?v=4"></script>
+    <script src="js/app.js?v=27"></script>
 </body>
 
 </html>

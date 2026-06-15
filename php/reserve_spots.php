@@ -6,6 +6,7 @@ $data = json_decode(file_get_contents('php://input'), true);
 $email = $data['email'] ?? '';
 $newWorkshops = $data['workshops'] ?? [];
 $newVisits = $data['visits'] ?? [];
+$regType = $data['regType'] ?? 'general';
 
 if (empty($email) || $email === 'No proporcionado') {
     echo json_encode(['success' => false, 'error' => 'Debe iniciar sesión o proporcionar un correo válido.']);
@@ -52,7 +53,11 @@ try {
         
         if ($item) {
             $actual = syncCapacity($pdo, $w_id, 'workshop');
-            if ($actual > (int)$item['cupo']) {
+            $limit = (int)$item['cupo'];
+            if ($regType === 'general') {
+                $limit += 2;
+            }
+            if ($actual > $limit) {
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 echo json_encode([
                     'success' => false, 

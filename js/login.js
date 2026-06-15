@@ -31,12 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
             submitBtn.disabled = true;
 
             try {
-                // --- ADMIN CHECK (Hardcoded for now as per current behavior) ---
-                if (email === 'admin@dranabel.com' && password === 'DranabelAdmin2026!') {
-                    sessionStorage.setItem('isAdminLoggedIn', 'true');
-                    window.location.href = 'admin-dashboard.html';
-                    return;
-                }
 
                 // --- USER CHECK via API ---
                 const response = await fetch('php/api.php?action=login_user', {

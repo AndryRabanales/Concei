@@ -15,20 +15,87 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        let isSetupMode = false;
+
+        // Verificar si existen administradores en el sistema
+        (async () => {
+            try {
+                const response = await fetch('php/api.php?action=get_admins');
+                const result = await response.json();
+                if (result.success && (!result.admins || result.admins.length === 0)) {
+                    isSetupMode = true;
+                    // Mostrar banner de modo setup
+                    errorMessage.style.display = 'block';
+                    errorMessage.style.background = '#e0f2fe';
+                    errorMessage.style.color = '#0369a1';
+                    errorMessage.style.borderColor = '#bae6fd';
+                    errorMessage.innerHTML = '<i class="fa-solid fa-circle-info"></i> <strong>Modo Configuración Activo:</strong> No hay cuentas registradas. Haz clic en <strong>Ingresar al Panel</strong> directamente para crear el primer Super Administrador.';
+                    
+                    // Hacer campos opcionales
+                    document.getElementById('email').removeAttribute('required');
+                    document.getElementById('password').removeAttribute('required');
+                }
+            } catch (err) {
+                console.error('Error al verificar administradores:', err);
+            }
+        })();
+
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('email').value;
             const password = passwordInput.value;
 
-            // MOCK CREDENTIALS FOR TESTING
-            if (email === 'admin@dranabel.com' && password === 'DranabelAdmin2026!') {
+            if (isSetupMode) {
+                // Bypass login check since database is empty
                 sessionStorage.setItem('isAdminLoggedIn', 'true');
-                window.location.href = 'admin-dashboard.html?v=6';
-            } else {
+                sessionStorage.setItem('adminUsername', 'Configuración Inicial');
+                sessionStorage.setItem('adminRol', 'superadmin');
+                sessionStorage.setItem('adminSetupMode', 'true');
+                window.location.href = 'admin-dashboard.html?v=7';
+                return;
+            }
+
+            try {
+                const response = await fetch('php/api.php?action=admin_login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: email, password: password })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    sessionStorage.setItem('isAdminLoggedIn', 'true');
+                    sessionStorage.setItem('adminUsername', result.admin.username);
+                    sessionStorage.setItem('adminRol', result.admin.rol);
+                    sessionStorage.setItem('adminToken', result.token);
+                    window.location.href = 'admin-dashboard.html?v=7';
+                } else if (response.status === 429) {
+                    errorMessage.style.display = 'block';
+                    errorMessage.style.background = '#fee2e2';
+                    errorMessage.style.color = '#b91c1c';
+                    errorMessage.style.borderColor = '#fecaca';
+                    errorMessage.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> ' + (result.error || 'Demasiados intentos fallidos. Intenta de nuevo en unos minutos.');
+                    setTimeout(() => {
+                        errorMessage.style.display = 'none';
+                    }, 5000);
+                } else {
+                    errorMessage.style.display = 'block';
+                    errorMessage.style.background = '#fee2e2';
+                    errorMessage.style.color = '#b91c1c';
+                    errorMessage.style.borderColor = '#fecaca';
+                    errorMessage.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Usuario o contraseña incorrectos.';
+                    setTimeout(() => {
+                        errorMessage.style.display = 'none';
+                    }, 3000);
+                }
+            } catch (err) {
+                console.error('Error de login:', err);
                 errorMessage.style.display = 'block';
-                setTimeout(() => {
-                    errorMessage.style.display = 'none';
-                }, 3000);
+                errorMessage.style.background = '#fee2e2';
+                errorMessage.style.color = '#b91c1c';
+                errorMessage.style.borderColor = '#fecaca';
+                errorMessage.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Error al conectar con el servidor.';
+                setTimeout(() => { errorMessage.style.display = 'none'; }, 3000);
             }
         });
     }
@@ -39,6 +106,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sessionStorage.getItem('isAdminLoggedIn') !== 'true') {
             window.location.href = 'admin-login.html';
             return;
+        }
+
+        // Restringir área de administradores solo para Superadmin
+        const adminRol = sessionStorage.getItem('adminRol');
+        if (adminRol !== 'superadmin') {
+            const adminsMenuItem = document.querySelector('.menu-item[data-type="admins"]');
+            if (adminsMenuItem) {
+                adminsMenuItem.style.display = 'none';
+            }
         }
     }
 
@@ -64,6 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const id = btn.dataset.id;
             const type = btn.dataset.type;
             const status = btn.dataset.status;
+            const name = btn.dataset.name || '';
 
             if (action === 'deleteItem') {
                 window.deleteItem(id, type);
@@ -73,6 +150,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.deleteReg(id);
             } else if (action === 'updateRegStatus') {
                 window.updateRegStatus(id, status);
+            } else if (action === 'viewUserDetail') {
+                window.viewUserDetail(id);
+            } else if (action === 'openDocReview') {
+                window.openDocReview(id, name);
             }
         });
         const menuItems = document.querySelectorAll('.menu-item');
@@ -81,6 +162,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const modal = document.getElementById('itemModal');
         const codeModal = document.getElementById('codeModal');
         const openModalBtn = document.getElementById('openModalBtn');
+        const downloadSvgBtn = document.getElementById('downloadSvgBtn');
+        const toggleActiveBtn = document.getElementById('toggleActiveBtn');
         const closeModalBtns = [
             document.getElementById('closeModalBtn'),
             document.querySelector('.close'),
@@ -92,11 +175,272 @@ document.addEventListener('DOMContentLoaded', () => {
         const generateCodesBtn = document.getElementById('generateCodesBtn');
         const logoutBtn = document.getElementById('logoutBtn');
 
-        let currentType = 'workshop'; // default
+        // --- Sesión de administrador: token, cierre por inactividad y fetch autenticado ---
+        const ADMIN_INACTIVITY_LIMIT_MS = 30 * 60 * 1000; // 30 minutos, igual que ADMIN_SESSION_TIMEOUT_MINUTES en api.php
+
+        function clearAdminSession() {
+            sessionStorage.removeItem('isAdminLoggedIn');
+            sessionStorage.removeItem('adminUsername');
+            sessionStorage.removeItem('adminRol');
+            sessionStorage.removeItem('adminToken');
+            sessionStorage.removeItem('adminSetupMode');
+        }
+
+        function performLogout(expired) {
+            const token = sessionStorage.getItem('adminToken');
+            if (token) {
+                fetch('php/api.php?action=admin_logout', { headers: { 'X-Admin-Token': token } }).catch(() => {});
+            }
+            clearAdminSession();
+            if (expired) alert('Tu sesión ha expirado por inactividad. Por favor inicia sesión de nuevo.');
+            window.location.href = 'admin-login.html';
+        }
+
+        // Wrapper de fetch que agrega el token de admin y maneja sesiones expiradas (401)
+        async function adminFetch(url, options = {}) {
+            const token = sessionStorage.getItem('adminToken');
+            const headers = Object.assign({}, options.headers || {});
+            if (token) headers['X-Admin-Token'] = token;
+            const response = await fetch(url, Object.assign({}, options, { headers }));
+            if (response.status === 401) {
+                clearAdminSession();
+                setTimeout(() => { window.location.href = 'admin-login.html'; }, 1500);
+            }
+            return response;
+        }
+
+        // Cierre de sesión automático por inactividad
+        let lastActivityTime = Date.now();
+        ['click', 'keydown', 'mousemove', 'scroll'].forEach(evt => {
+            document.addEventListener(evt, () => { lastActivityTime = Date.now(); }, { passive: true });
+        });
+        setInterval(() => {
+            if (Date.now() - lastActivityTime > ADMIN_INACTIVITY_LIMIT_MS) {
+                performLogout(true);
+            }
+        }, 60 * 1000);
+
+        let currentType = (sessionStorage.getItem('adminSetupMode') === 'true') ? 'admins' : 'registrations';
         let editingId = null;
+        let editingActivo = 1;
         let highlightId = null; // Para resaltar nuevos elementos
 
-        // Datos cargados desde la base de datos
+        let editingAdminId = null;
+
+        function renderAdminDashboard(container, admins) {
+            container.innerHTML = `
+                <div class="data-card" style="margin-bottom: 0;">
+                    <h3 id="adminFormTitle" style="margin-bottom: 10px; font-size: 1.2rem; display: flex; align-items: center; gap: 8px; color: var(--admin-sidebar);">
+                        <i class="fa-solid fa-user-plus" style="color: var(--primary-color);"></i> 
+                        ${editingAdminId ? 'Editar Administrador' : 'Crear Administrador'}
+                    </h3>
+                    <p style="color: #64748b; font-size: 0.85rem; margin-bottom: 20px;">
+                        ${editingAdminId ? 'Modifica los datos del administrador y guarda los cambios.' : 'Crea una nueva cuenta de administrador ingresando su correo y contraseña.'}
+                    </p>
+                    <form id="adminForm" onsubmit="event.preventDefault();">
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label for="adminEmail" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">Correo Electrónico</label>
+                            <input type="email" id="adminEmail" required placeholder="ejemplo@dranabel.com" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label for="adminPassword" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">Contraseña</label>
+                            <input type="password" id="adminPassword" placeholder="${editingAdminId ? 'Nueva contraseña (vacía para conservar)' : 'Mínimo 8 caracteres'}" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 25px;">
+                            <label for="adminRole" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">Rol</label>
+                            <select id="adminRole" ${admins.length === 0 ? 'disabled' : ''} style="width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; background: ${admins.length === 0 ? '#f1f5f9' : 'white'};">
+                                ${admins.length === 0 ? '<option value="superadmin" selected>Super Administrador (Obligatorio para el primer usuario)</option>' : `
+                                <option value="admin">Administrador</option>
+                                <option value="superadmin">Super Administrador</option>
+                                `}
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn-save" id="btnSubmitAdmin" style="flex-grow: 1; padding: 12px; font-weight: 600; justify-content: center; display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <i class="fa-solid fa-check"></i> ${editingAdminId ? 'Guardar Cambios' : 'Crear Admin'}
+                            </button>
+                            ${editingAdminId ? `
+                                <button type="button" class="btn-cancel" id="btnCancelAdminEdit" style="padding: 12px; font-weight: 600; cursor: pointer;">
+                                    Cancelar
+                                </button>
+                            ` : ''}
+                        </div>
+                    </form>
+                </div>
+                
+                <div class="data-card" style="margin-bottom: 0;">
+                    <h3 style="margin-bottom: 10px; font-size: 1.2rem; display: flex; align-items: center; gap: 8px; color: var(--admin-sidebar);">
+                        <i class="fa-solid fa-users-gear" style="color: var(--primary-color);"></i> 
+                        Administradores Activos
+                    </h3>
+                    <p style="color: #64748b; font-size: 0.85rem; margin-bottom: 20px;">
+                        Lista de usuarios con acceso al panel de administración.
+                    </p>
+                    <div style="overflow-x: auto;">
+                        <table class="data-table" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align: left; padding: 12px 15px;">Correo</th>
+                                    <th style="text-align: left; padding: 12px 15px;">Rol</th>
+                                    <th style="text-align: right; padding: 12px 15px;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${admins.map(adm => {
+                                    const isSelf = adm.username === sessionStorage.getItem('adminUsername');
+                                    const roleLabel = adm.rol === 'superadmin' ? 'Super Admin' : 'Admin';
+                                    const roleClass = adm.rol === 'superadmin' ? 'status-pill-success' : 'status-pill-warning';
+                                    return `
+                                        <tr>
+                                            <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
+                                                <strong style="color: #1e293b;">${adm.username}</strong>
+                                                ${isSelf ? '<span style="font-size:0.75rem; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius:4px; font-weight:bold; margin-left: 6px;">Tú</span>' : ''}
+                                            </td>
+                                            <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
+                                                <span class="status-pill ${roleClass}">${roleLabel}</span>
+                                            </td>
+                                            <td style="padding: 12px 15px; text-align: right; border-bottom: 1px solid var(--border-color);" class="actions">
+                                                <button class="btn-icon btn-edit" onclick="window.editAdmin(${adm.id}, '${adm.username}', '${adm.rol}')" title="Editar"><i class="fa-solid fa-pen"></i></button>
+                                                <button class="btn-icon btn-delete" onclick="window.deleteAdmin(${adm.id}, ${isSelf})" title="Eliminar"><i class="fa-solid fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+            // If we are editing, populate the fields
+            if (editingAdminId) {
+                const targetAdmin = admins.find(a => a.id === editingAdminId);
+                if (targetAdmin) {
+                    document.getElementById('adminEmail').value = targetAdmin.username;
+                    document.getElementById('adminRole').value = targetAdmin.rol;
+                }
+            }
+
+            // Bind events
+            const btnSubmit = document.getElementById('btnSubmitAdmin');
+            if (btnSubmit) {
+                btnSubmit.onclick = async () => {
+                    const email = document.getElementById('adminEmail').value.trim();
+                    const password = document.getElementById('adminPassword').value;
+                    const role = admins.length === 0 ? 'superadmin' : document.getElementById('adminRole').value;
+
+                    if (!email) {
+                        alert('Por favor, ingresa el correo electrónico.');
+                        return;
+                    }
+                    if (!editingAdminId && !password) {
+                        alert('Por favor, ingresa la contraseña para el nuevo administrador.');
+                        return;
+                    }
+                    if (password && password.length < 8) {
+                        alert('La contraseña debe tener al menos 8 caracteres.');
+                        return;
+                    }
+
+                    // Save
+                    const wasBootstrap = admins.length === 0 && !editingAdminId;
+                    try {
+                        const response = await adminFetch('php/api.php?action=save_admin', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                id: editingAdminId,
+                                username: email,
+                                password: password,
+                                rol: role
+                            })
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            alert(result.message || 'Operación realizada con éxito.');
+
+                            // If current admin updated their own username, update session storage
+                            if (editingAdminId) {
+                                const originalUsername = admins.find(a => a.id === editingAdminId)?.username;
+                                if (originalUsername === sessionStorage.getItem('adminUsername')) {
+                                    sessionStorage.setItem('adminUsername', email);
+                                }
+                            }
+
+                            // Si se creó el primer administrador (modo configuración), obtener
+                            // un token de sesión real iniciando sesión con esas credenciales.
+                            if (wasBootstrap) {
+                                try {
+                                    const loginResponse = await fetch('php/api.php?action=admin_login', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ username: email, password: password })
+                                    });
+                                    const loginResult = await loginResponse.json();
+                                    if (loginResult.success) {
+                                        sessionStorage.setItem('adminUsername', loginResult.admin.username);
+                                        sessionStorage.setItem('adminRol', loginResult.admin.rol);
+                                        sessionStorage.setItem('adminToken', loginResult.token);
+                                        sessionStorage.removeItem('adminSetupMode');
+                                    }
+                                } catch (err) {
+                                    console.error('Error al iniciar sesión tras crear el primer administrador:', err);
+                                }
+                            }
+
+                            editingAdminId = null;
+                            renderItems();
+                        } else {
+                            alert('Error: ' + result.error);
+                        }
+                    } catch (err) {
+                        console.error('Error al guardar admin:', err);
+                        alert('Error al conectar con el servidor.');
+                    }
+                };
+            }
+
+            const btnCancel = document.getElementById('btnCancelAdminEdit');
+            if (btnCancel) {
+                btnCancel.onclick = () => {
+                    editingAdminId = null;
+                    renderItems();
+                };
+            }
+        }
+
+        window.editAdmin = (id, username, rol) => {
+            editingAdminId = id;
+            renderItems();
+        };
+
+        window.deleteAdmin = async (id, isSelf) => {
+            let msg = '¿Estás seguro de que deseas eliminar a este administrador? Perderá el acceso de inmediato.';
+            if (isSelf) {
+                msg = '⚠️ ¡ATENCIÓN! Estás a punto de eliminar TU PROPIA CUENTA. Si la eliminas, tu sesión se cerrará de inmediato y la base de datos quedará vacía (activando el Modo Configuración). ¿Deseas continuar?';
+            }
+            const confirmed = await showConfirm(msg);
+            if (confirmed) {
+                try {
+                    const response = await adminFetch(`php/api.php?action=delete_admin&id=${id}&t=${Date.now()}`);
+                    const result = await response.json();
+                    if (result.success) {
+                        if (isSelf) {
+                            alert('Tu cuenta ha sido eliminada. La base de datos está vacía. Serás redirigido al panel de inicio de sesión.');
+                            clearAdminSession();
+                            window.location.href = 'admin-login.html';
+                        } else {
+                            renderItems();
+                        }
+                    } else {
+                        alert('Error al eliminar: ' + result.error);
+                    }
+                } catch (err) {
+                    console.error('Error al eliminar admin:', err);
+                    alert('Error al conectar con el servidor.');
+                }
+            }
+        };
 
 
         async function getData() {
@@ -107,11 +451,16 @@ document.addEventListener('DOMContentLoaded', () => {
         async function renderItems() {
             const data = await getData();
             let items = [];
+            const adminSec = document.getElementById('adminSectionContainer');
 
             if (currentType === 'registrations') {
-                const regResponse = await fetch(`php/api.php?action=get_registrations&t=${Date.now()}`);
+                const regResponse = await adminFetch(`php/api.php?action=get_registrations&t=${Date.now()}`);
                 const regData = await regResponse.json();
                 items = regData.registrations || [];
+            } else if (currentType === 'admins') {
+                const response = await adminFetch(`php/api.php?action=get_admins&t=${Date.now()}`);
+                const result = await response.json();
+                items = result.admins || [];
             } else {
                 items = data[currentType] || [];
             }
@@ -120,19 +469,65 @@ document.addEventListener('DOMContentLoaded', () => {
             itemsList.innerHTML = '';
 
             const thead = document.querySelector('.data-table thead tr');
-            document.querySelector('.data-table').style.display = 'table';
-            const existingSettings = document.getElementById('settingsContainer');
-            if (existingSettings) existingSettings.remove();
+
+            if (currentType === 'admins') {
+                document.querySelector('.data-card').style.display = 'none';
+                openModalBtn.style.display = 'none';
+                
+                let adminSec = document.getElementById('adminSectionContainer');
+                if (!adminSec) {
+                    adminSec = document.createElement('div');
+                    adminSec.id = 'adminSectionContainer';
+                    adminSec.style.cssText = 'display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; margin-top: 20px;';
+                    
+                    const mediaQuery = window.matchMedia('(max-width: 900px)');
+                    const handleMedia = (e) => {
+                        if (e.matches) {
+                            adminSec.style.gridTemplateColumns = '1fr';
+                        } else {
+                            adminSec.style.gridTemplateColumns = '1fr 1.5fr';
+                        }
+                    };
+                    mediaQuery.addListener(handleMedia);
+                    handleMedia(mediaQuery);
+                    
+                    document.querySelector('.data-card').parentNode.appendChild(adminSec);
+                }
+                adminSec.style.display = 'grid';
+                renderAdminDashboard(adminSec, items);
+                return;
+            } else {
+                document.querySelector('.data-card').style.display = 'block';
+                if (adminSec) adminSec.style.display = 'none';
+                document.querySelector('.data-table').style.display = 'table';
+            }
+
 
             if (currentType === 'code') {
                 thead.innerHTML = `<th>Código</th><th>Estado</th><th>Fecha de Creación</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
+                toggleActiveBtn.style.display = 'none';
             } else if (currentType === 'registrations') {
-                thead.innerHTML = `<th>Nombre</th><th>Email</th><th>Documentos</th><th>Concepto</th><th>Monto</th><th>Estatus</th><th>Acciones</th>`;
+                thead.innerHTML = `<th>Nombre</th><th>Email</th><th>Documentos</th><th>Concepto</th><th>Monto</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'none';
+                toggleActiveBtn.style.display = 'none';
+            } else if (currentType === 'workshop' || currentType === 'visit') {
+                thead.innerHTML = `<th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>ID</th><th>Acciones</th>`;
+                openModalBtn.style.display = 'flex';
+
+                // El botón refleja la acción a realizar: si TODOS los items
+                // están activos, se ofrece desactivar todos; si alguno está
+                // inactivo, se ofrece activar todos.
+                const allActive = items.length > 0 && items.every(item => String(item.activo) !== '0');
+                toggleActiveBtn.style.display = 'flex';
+                toggleActiveBtn.dataset.targetActive = allActive ? '0' : '1';
+                toggleActiveBtn.innerHTML = allActive
+                    ? '<i class="fa-solid fa-power-off"></i> Desactivar Todos'
+                    : '<i class="fa-solid fa-power-off"></i> Activar Todos';
             } else {
                 thead.innerHTML = `<th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>ID</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
+                toggleActiveBtn.style.display = 'none';
             }
  
             items.forEach(item => {
@@ -161,29 +556,80 @@ document.addEventListener('DOMContentLoaded', () => {
                         </td>
                     `;
                 } else if (currentType === 'registrations') {
-                    const statusClass = item.status === 'aceptado' ? 'status-pill-success' : (item.status === 'denegado' ? 'status-pill-danger' : 'status-pill-warning');
-                    const statusText = item.status ? item.status.toUpperCase() : 'PENDIENTE';
+                    let conceptId = 'N/A';
+                    if (item.concept && item.concept !== 'N/A') {
+                        const match = item.concept.match(/^\d+/);
+                        if (match) conceptId = match[0].padStart(4, '0');
+                    }
+
+                    // Bolitas de documentos: una bolita por cada archivo subido
+                    const DOC_DOTS = [
+                        { label: 'Comprobante de Pago',          docsKey: 'docs_comprobante' },
+                        { label: 'Identificación / Credencial',  docsKey: 'docs_identificacion' },
+                        { label: 'Constancia Fiscal (RFC)',      docsKey: 'docs_constancia' },
+                    ];
+
+                    const dotsHtml = DOC_DOTS
+                        .flatMap(d => {
+                            const estados = (item[d.docsKey] || '').split(',').filter(Boolean);
+                            return estados.map(st => {
+                                const bg     = st === 'aceptado'  ? '#10b981'
+                                             : st === 'rechazado' ? '#ef4444'
+                                             : '#94a3b8';
+                                const border = st === 'aceptado'  ? '2px solid #10b981'
+                                             : st === 'rechazado' ? '2px solid #ef4444'
+                                             : '2px solid #94a3b8';
+                                const title  = `${d.label}: ${st.toUpperCase()}`;
+                                return `<span title="${title}" style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${bg};border:${border};flex-shrink:0;"></span>`;
+                            });
+                        }).join('');
+
+                    const dotsWrapper = dotsHtml
+                        ? `<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">${dotsHtml}</div>`
+                        : `<span style="color:#94a3b8;font-size:0.8rem;">Sin docs</span>`;
+
+                    // Historial de conceptos generados: uno por cada compra/registro realizado
+                    const conceptosArr = (item.conceptos_historial || '').split('||').filter(Boolean);
+                    const totalesArr   = (item.totales_historial || '').split('||').filter(Boolean);
+
+                    let conceptHtml, totalHtml;
+                    if (conceptosArr.length > 0) {
+                        conceptHtml = conceptosArr.map(c =>
+                            `<code style="display:block;background: #f1f5f9; padding: 2px 5px; border-radius: 4px; margin-bottom:4px; font-size:0.8rem;">${c}</code>`
+                        ).join('');
+                        totalHtml = totalesArr.map(t =>
+                            `<span style="display:block; font-weight:500; margin-bottom:4px;">${t}</span>`
+                        ).join('');
+                    } else {
+                        conceptHtml = `<code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px;">${item.concept || 'N/A'}</code>`;
+                        totalHtml = item.total || '$0.00';
+                    }
 
                     tr.innerHTML = `
-                        <td style="font-weight: 600;">${item.fullName || 'N/A'}</td>
-                        <td>${item.email || 'N/A'}</td>
-                        <td class="actions">
-                            ${item.comprobante ? `<a href="uploads/${item.comprobante}" target="_blank" class="btn-icon btn-edit" title="Ver Comprobante de Pago" style="background: #e0f2fe; color: #0369a1;"><i class="fa-solid fa-file-invoice-dollar"></i></a>` : ''}
-                            ${item.identificacion ? `<a href="uploads/${item.identificacion}" target="_blank" class="btn-icon btn-edit" title="Ver ID Estudiante" style="background: #fdf2f8; color: #be185d;"><i class="fa-solid fa-id-card"></i></a>` : ''}
-                            ${item.constancia ? `<a href="uploads/${item.constancia}" target="_blank" class="btn-icon btn-edit" title="Ver Constancia RFC" style="background: #f0fdf4; color: #15803d;"><i class="fa-solid fa-file-contract"></i></a>` : ''}
+                        <td style="font-weight: 600;">
+                            <span style="color: var(--primary-color); font-weight: 700; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 6px; border-radius: 6px; font-size: 0.78rem; font-family: monospace; margin-right: 8px; display: inline-block; vertical-align: middle;">ID ${conceptId}</span>
+                            <span style="vertical-align: middle;">${item.fullName || 'N/A'}</span>
                         </td>
-                        <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px;">${item.concept || 'N/A'}</code></td>
-                        <td style="font-weight: 500;">${item.total || '$0.00'}</td>
-                        <td><span class="status-pill ${statusClass}">${statusText}</span></td>
-                        <td class="actions">
-                            <button class="btn-icon btn-edit action-btn" style="background: #dcfce7; color: #15803d;" data-action="updateRegStatus" data-id="${item.folio}" data-status="aceptado" title="Aceptar Pago"><i class="fa-solid fa-check"></i></button>
-                            <button class="btn-icon btn-delete action-btn" data-action="updateRegStatus" data-id="${item.folio}" data-status="denegado" title="Denegar Pago"><i class="fa-solid fa-xmark"></i></button>
-                            <button class="btn-icon btn-delete action-btn" style="background: #fca5a5; color: #7f1d1d;" data-action="deleteReg" data-id="${item.folio}" title="Eliminar Registro Permanente"><i class="fa-solid fa-trash"></i></button>
+                        <td>${item.email || 'N/A'}</td>
+                        <td>${dotsWrapper}</td>
+                        <td>${conceptHtml}</td>
+                        <td>${totalHtml}</td>
+                        <td>
+                            <div class="actions">
+                                <button class="btn-icon btn-edit action-btn" style="background: #e0f2fe; color: #0369a1;" data-action="viewUserDetail" data-id="${item.folio}" title="Ver Detalle Completo"><i class="fa-solid fa-eye"></i></button>
+                                <button class="btn-icon btn-edit action-btn" style="background: #dcfce7; color: #15803d;" data-action="openDocReview" data-id="${item.folio}" data-name="${(item.fullName||'').replace(/"/g,'&quot;')}" title="Revisar Documentos"><i class="fa-solid fa-check"></i></button>
+                                <button class="btn-icon btn-delete action-btn" data-action="deleteReg" data-id="${item.folio}" title="Eliminar Registro Permanente"><i class="fa-solid fa-trash"></i></button>
+                            </div>
                         </td>
                     `;
                 } else if (currentType === 'workshop' || currentType === 'visit') {
+                    const isActive = String(item.activo) !== '0';
+                    const statusBadge = isActive
+                        ? `<span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #dcfce7; color: #15803d; font-weight: 600; display: inline-block; margin-bottom: 4px;"><i class="fa-solid fa-circle-check"></i> Activo</span>`
+                        : `<span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #fee2e2; color: #b91c1c; font-weight: 600; display: inline-block; margin-bottom: 4px;"><i class="fa-solid fa-circle-xmark"></i> Inactivo</span>`;
                     tr.innerHTML = `
                         <td>
+                            ${statusBadge}
                             <strong style="display:block; margin-bottom: 4px; color: #1e293b;">${item.name}${newBadge}</strong>
                             <small style="color: var(--primary-color); display:block;"><strong>Instructor:</strong> ${item.instructor || 'Por definir'}</small>
                             <small style="color: #64748b; display:block;"><strong>Dependencia:</strong> ${item.dependency || 'N/A'}</small>
@@ -206,9 +652,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             </small>
                         </td>
                         <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-weight: bold;">${item.id}</code></td>
-                        <td class="actions">
-                            <button class="btn-icon btn-edit action-btn" data-action="editItem" data-id="${item.id}" data-type="${currentType}"><i class="fa-solid fa-pen"></i></button>
-                            <button class="btn-icon btn-delete action-btn" data-action="deleteItem" data-id="${item.id}" data-type="${currentType}"><i class="fa-solid fa-trash"></i></button>
+                        <td>
+                            <div class="actions">
+                                <button class="btn-icon btn-edit action-btn" data-action="editItem" data-id="${item.id}" data-type="${currentType}"><i class="fa-solid fa-pen"></i></button>
+                                <button class="btn-icon btn-delete action-btn" data-action="deleteItem" data-id="${item.id}" data-type="${currentType}"><i class="fa-solid fa-trash"></i></button>
+                            </div>
                         </td>
                     `;
                 }
@@ -223,6 +671,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 item.classList.add('active');
                 currentType = item.dataset.type;
 
+                downloadSvgBtn.style.display = 'none';
+                document.getElementById('searchBarWrapper').style.display = 'none';
+                document.getElementById('regSearchInput').value = '';
+
                 if (currentType === 'workshop') {
                     pageTitle.textContent = 'Gestión de Talleres';
                     pageDescription.textContent = 'Administra los talleres disponibles del Congreso.';
@@ -233,7 +685,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     openModalBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Agregar Visita';
                 } else if (currentType === 'registrations') {
                     pageTitle.textContent = 'Usuarios Registrados';
-                    pageDescription.textContent = 'Gestiona los registros, valida pagos y actualiza el estatus de los asistentes.';
+                    pageDescription.textContent = 'Gestiona los registros, valida pagos y actualiza el estatus de los usuarios.';
+                    openModalBtn.style.display = 'none';
+                    downloadSvgBtn.style.display = 'flex';
+                    document.getElementById('searchBarWrapper').style.display = 'block';
+                } else if (currentType === 'admins') {
+                    pageTitle.textContent = 'Gestión de Administradores';
+                    pageDescription.textContent = 'Administra las cuentas de administrador y sus permisos de acceso.';
                     openModalBtn.style.display = 'none';
                 } else {
                     pageTitle.textContent = 'Códigos de Registro';
@@ -254,10 +712,39 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             editingId = null;
+            editingActivo = 1;
             itemForm.reset();
-            document.getElementById('itemId').value = '';
             document.getElementById('itemId').disabled = false;
             
+            // Auto-generación de ID según reglamento (T01, T02... / V01, V02...)
+            if (currentType === 'workshop' || currentType === 'visit') {
+                document.getElementById('itemId').placeholder = "Generando ID...";
+                getData().then(data => {
+                    const list = data[currentType] || [];
+                    const prefix = currentType === 'workshop' ? 'T' : 'V';
+                    let maxNum = 0;
+                    
+                    list.forEach(item => {
+                        const match = item.id.match(new RegExp(`^${prefix}(\\d+)`, 'i'));
+                        if (match) {
+                            const num = parseInt(match[1], 10);
+                            if (num > maxNum) {
+                                maxNum = num;
+                            }
+                        }
+                    });
+                    
+                    const nextNum = maxNum + 1;
+                    const nextId = `${prefix}${nextNum.toString().padStart(2, '0')}`;
+                    document.getElementById('itemId').value = nextId;
+                }).catch(err => {
+                    console.error("Error al generar ID automático:", err);
+                    document.getElementById('itemId').value = '';
+                });
+            } else {
+                document.getElementById('itemId').value = '';
+            }
+
             // Limpiar contador de cupo actual al agregar nuevo
             const currentVal = document.getElementById('itemCurrentValue');
             if (currentVal) currentVal.value = '0';
@@ -314,31 +801,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // CRUD Functions
-        window.saveSettings = async () => {
-            const prices = {
-                general: parseFloat(document.getElementById('price_general').value) || 0,
-                student_external: parseFloat(document.getElementById('price_student_external').value) || 0,
-                student_uady: parseFloat(document.getElementById('price_student_uady').value) || 0
-            };
-            
-            const response = await fetch('php/api.php?action=update_settings', {
-                method: 'POST',
-                body: JSON.stringify(prices)
-            });
-            const result = await response.json();
-            if (result.success) {
-                alert('¡Precios actualizados correctamente!');
-            } else {
-                alert('Error al guardar: ' + result.error);
-            }
-        };
-
         window.editItem = async (id, type) => {
             const data = await getData();
             const actualType = type || currentType;
             const item = data[actualType].find(i => i.id === id);
             if (item) {
                 editingId = id;
+                editingActivo = (item.activo === undefined || item.activo === null) ? 1 : parseInt(item.activo);
                 document.getElementById('itemId').value = item.id;
                 document.getElementById('itemId').disabled = true; // No permitir cambiar ID en edición para evitar duplicados
                 document.getElementById('itemName').value = item.name;
@@ -377,7 +846,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (confirmed) {
                 const url = `php/api.php?action=delete_item&id=${encodeURIComponent(id)}&type=${encodeURIComponent(actualType)}&t=${Date.now()}`;
                 try {
-                    const response = await fetch(url);
+                    const response = await adminFetch(url);
                     const result = await response.json();
                     if (result.success) {
                         renderItems();
@@ -401,7 +870,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 dependency: document.getElementById('itemDependency').value,
                 modality: document.getElementById('itemModality').value,
                 capacity: parseInt(document.getElementById('itemCapacity').value) || 0,
-                cupo_actual: parseInt(document.getElementById('itemCurrentValue')?.value) || 0
+                cupo_actual: parseInt(document.getElementById('itemCurrentValue')?.value) || 0,
+                activo: editingActivo
             };
 
             if (!itemData.name || isNaN(itemData.price)) {
@@ -409,7 +879,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const response = await fetch(`php/api.php?action=save_item&type=${currentType}`, {
+            const response = await adminFetch(`php/api.php?action=save_item&type=${currentType}`, {
                 method: 'POST',
                 body: JSON.stringify(itemData)
             });
@@ -448,7 +918,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     newCodes.push({ id: `${prefix}-${randomSuffix}` });
                 }
 
-                const response = await fetch('php/api.php?action=generate_codes', {
+                const response = await adminFetch('php/api.php?action=generate_codes', {
                     method: 'POST',
                     body: JSON.stringify({ codes: newCodes })
                 });
@@ -465,12 +935,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         logoutBtn.onclick = (e) => {
             e.preventDefault();
-            sessionStorage.removeItem('isAdminLoggedIn');
-            window.location.href = 'admin-login.html';
+            performLogout(false);
         };
 
         window.updateRegStatus = async (folio, newStatus) => {
-            const response = await fetch('php/api.php?action=update_reg_status', {
+            const response = await adminFetch('php/api.php?action=update_reg_status', {
                 method: 'POST',
                 body: JSON.stringify({ folio, status: newStatus })
             });
@@ -490,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.deleteReg = async (folio) => {
             const confirmed = await showConfirm('¿Estás seguro de que deseas eliminar este registro por completo?');
             if (confirmed) {
-                const response = await fetch(`php/api.php?action=delete_reg&folio=${folio}&t=${Date.now()}`);
+                const response = await adminFetch(`php/api.php?action=delete_reg&folio=${folio}&t=${Date.now()}`);
                 const result = await response.json();
                 if (result.success) {
                     renderItems();
@@ -500,9 +969,757 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // delegation listener moved to top
+        // --- TABS CONTROL FOR DETAIL MODAL ---
+        window.switchDetailTab = (tabName) => {
+            // Hide all tab contents
+            document.querySelectorAll('.detail-tab-content').forEach(el => {
+                el.style.display = 'none';
+            });
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.detail-tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            // Show selected tab content
+            const targetTab = document.getElementById('tab-' + tabName);
+            if (targetTab) {
+                targetTab.style.display = 'block';
+            }
+            // Add active class to clicked button
+            const btns = document.querySelectorAll('.detail-tab-btn');
+            btns.forEach(btn => {
+                if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabName)) {
+                    btn.classList.add('active');
+                }
+            });
+        };
 
-        // Initial Render
+        window.closeUserDetailModal = () => {
+            const modal = document.getElementById('userDetailModal');
+            if (modal) modal.style.display = 'none';
+        };
+
+        window.viewUserDetail = async (folio) => {
+            const detailModal = document.getElementById('userDetailModal');
+            if (!detailModal) return;
+
+            // Reset to first tab
+            window.switchDetailTab('personal');
+
+            try {
+                const response = await adminFetch(`php/api.php?action=get_registration_detail&folio=${encodeURIComponent(folio)}&t=${Date.now()}`);
+                const result = await response.json();
+
+                if (!result.success) {
+                    alert('Error al cargar detalles: ' + result.error);
+                    return;
+                }
+
+                const data = result.main;
+                const billing = result.billing;
+                const workshops = result.workshops;
+                const visits = result.visits;
+                const contributions = result.contributions;
+
+                // Folio and Name in header
+                document.getElementById('detailUserFolio').textContent = data.folio;
+                document.getElementById('detailUserName').textContent = (data.nombre || '') + ' ' + (data.apellido || '');
+
+                // Tab 1: Datos Personales
+                document.getElementById('det-fullname').textContent = (data.nombre || 'N/A') + ' ' + (data.apellido || 'N/A');
+                document.getElementById('det-email').textContent = data.email || 'N/A';
+                document.getElementById('det-phone').textContent = data.telefono || 'N/A';
+                document.getElementById('det-institution').textContent = data.institucion || 'N/A';
+                document.getElementById('det-city').textContent = data.ciudad || 'N/A';
+                document.getElementById('det-location').textContent = (data.estado ? data.estado + ', ' : '') + (data.pais || 'N/A');
+
+                // Tab 2: Pago y Documentos
+                const regTypeNames = {
+                    'general': 'Público General / Profesional',
+                    'student_external': 'Estudiante Externo',
+                    'student_uady': 'Estudiante UADY',
+                    'code_access': 'Acceso Especial por Código / Convenio'
+                };
+                document.getElementById('det-regtype').textContent = regTypeNames[data.regType] || data.regType || 'N/A';
+
+                // Historial de conceptos generados (todas las compras/registros del usuario)
+                const conceptosHistorial = result.conceptos_historial || [];
+                const historialContainer = document.getElementById('det-conceptos-historial');
+                if (conceptosHistorial.length > 0) {
+                    historialContainer.innerHTML = conceptosHistorial.map(c => `
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:white;border:1px solid var(--border-color);border-radius:8px;padding:10px 14px;">
+                            <code style="font-weight:600;font-size:0.95rem;color:#0f172a;background:#f1f5f9;padding:4px 8px;border-radius:4px;">${c.concepto}</code>
+                            <span style="font-weight:700;color:#16a34a;">${c.total || '$0.00'}</span>
+                            <span style="color:#94a3b8;font-size:0.8rem;margin-left:auto;">${c.fecha_generado || ''}</span>
+                        </div>
+                    `).join('');
+                } else {
+                    historialContainer.innerHTML = '<p style="color:#94a3b8;font-size:0.9rem;margin:0;">Sin conceptos registrados.</p>';
+                }
+
+                // Render Documents (historial completo, agrupado por tipo)
+                const docsContainer = document.getElementById('det-documents-container');
+                docsContainer.innerHTML = '';
+
+                const docTypeInfo = {
+                    comprobante:    { title: 'Comprobante de Pago',         bg: '#e0f2fe', color: '#0369a1', icon: 'fa-file-invoice-dollar' },
+                    identificacion: { title: 'Identificación / Credencial', bg: '#fdf2f8', color: '#be185d', icon: 'fa-id-card' },
+                    constancia:     { title: 'Constancia Fiscal (RFC)',     bg: '#f0fdf4', color: '#15803d', icon: 'fa-file-contract' },
+                };
+                const docStatusLabel = {
+                    aceptado:  { label: 'ACEPTADO',  cls: 'status-pill-success' },
+                    rechazado: { label: 'RECHAZADO', cls: 'status-pill-danger' },
+                    pendiente: { label: 'PENDIENTE', cls: 'status-pill-warning' },
+                };
+
+                const allDocs = result.documents || [];
+                if (allDocs.length === 0) {
+                    docsContainer.innerHTML = `
+                        <div style="grid-column: span 2; padding: 20px; text-align: center; color: #64748b; font-style: italic;">
+                            <i class="fa-solid fa-folder-open" style="font-size: 2rem; display:block; margin-bottom: 8px; opacity: 0.5;"></i>
+                            No se cargó ningún documento para este usuario.
+                        </div>
+                    `;
+                } else {
+                    // Agrupamos por folio ("subida"/compra) para mostrar el historial
+                    // completo (rechazados y nuevos) en orden cronológico, con la misma
+                    // numeración (Primera/Segunda Subida...) que el modal de revisión.
+                    const purchaseNumByFolio = buildPurchaseNumByFolio(allDocs);
+                    const docOrder = { identificacion: 0, comprobante: 1, constancia: 2 };
+                    const docsByFolio = {};
+                    allDocs.forEach(doc => (docsByFolio[doc.folio] = docsByFolio[doc.folio] || []).push(doc));
+
+                    const folios = [...new Set(allDocs.map(d => d.folio))].sort((a, b) => folioNum(a) - folioNum(b));
+
+                    folios.forEach(folio => {
+                        const num = purchaseNumByFolio[folio] || null;
+                        const header = document.createElement('div');
+                        header.style.cssText = 'grid-column: span 2; margin-top: 4px; font-weight: 700; color: #475569; font-size: 0.85rem; display:flex; align-items:center; gap:8px;';
+                        header.innerHTML = `<i class="fa-solid fa-layer-group"></i> ${num ? `${ordinalEs(num, 'f')} Subida` : 'Documentos del Registro'} <span style="font-weight:400; color:#94a3b8;">(${folio})</span>`;
+                        docsContainer.appendChild(header);
+
+                        const docs = docsByFolio[folio].slice().sort((a, b) => {
+                            if (a.tipo_doc !== b.tipo_doc) return docOrder[a.tipo_doc] - docOrder[b.tipo_doc];
+                            return new Date(a.fecha_subida) - new Date(b.fecha_subida);
+                        });
+
+                        docs.forEach(doc => {
+                            const info = docTypeInfo[doc.tipo_doc] || docTypeInfo.comprobante;
+                            const st = docStatusLabel[doc.estado] || docStatusLabel.pendiente;
+
+                            let title = info.title;
+                            if (num && doc.tipo_doc === 'comprobante') title = `${ordinalEs(num, 'm')} Comprobante de Pago`;
+                            else if (num && doc.tipo_doc === 'constancia') title = `RFC / Constancia Fiscal (${ordinalEs(num, 'f')} Compra)`;
+
+                            const docEl = document.createElement('a');
+                            docEl.href = `uploads/${doc.archivo}`;
+                            docEl.target = '_blank';
+                            docEl.style.cssText = `
+                                display: flex;
+                                align-items: center;
+                                gap: 12px;
+                                padding: 12px 15px;
+                                border-radius: 8px;
+                                background: ${info.bg};
+                                color: ${info.color};
+                                text-decoration: none;
+                                font-weight: 600;
+                                font-size: 0.9rem;
+                                border: 1px solid rgba(0,0,0,0.05);
+                                transition: transform 0.2s, box-shadow 0.2s;
+                            `;
+                            docEl.onmouseover = () => {
+                                docEl.style.transform = 'translateY(-2px)';
+                                docEl.style.boxShadow = '0 4px 6px rgba(0,0,0,0.05)';
+                            };
+                            docEl.onmouseout = () => {
+                                docEl.style.transform = 'translateY(0)';
+                                docEl.style.boxShadow = 'none';
+                            };
+                            const shortName = doc.archivo.substring(doc.archivo.indexOf('_') + 1);
+                            docEl.innerHTML = `
+                                <div style="font-size: 1.5rem;"><i class="fa-solid ${info.icon}"></i></div>
+                                <div style="flex-grow: 1; text-align: left; min-width:0;">
+                                    <span style="display:block; font-size: 0.85rem; font-weight: 600; opacity: 0.95;">${title}</span>
+                                    <span style="display:block; font-size: 0.75rem; opacity: 0.7; word-break: break-all;">${shortName}</span>
+                                    <span style="display:block; font-size: 0.7rem; opacity: 0.6; margin-top:2px;">${doc.fecha_subida}</span>
+                                </div>
+                                <span class="status-pill ${st.cls}" style="flex-shrink:0;font-size:0.7rem;">${st.label}</span>
+                                <div><i class="fa-solid fa-arrow-up-right-from-square"></i></div>
+                            `;
+                            docsContainer.appendChild(docEl);
+                        });
+                    });
+                }
+
+                // Tab 3: Talleres y Visitas
+                const workshopsList = document.getElementById('det-workshops-list');
+                workshopsList.innerHTML = '';
+                if (workshops && workshops.length > 0) {
+                    workshops.forEach(w => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
+                        el.innerHTML = `
+                            <div>
+                                <strong style="color: #1e293b; display:block;">${w.nombre}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${w.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${w.instructor || 'Instructor por definir'} | <i class="fa-solid fa-laptop"></i> ${w.modalidad || 'Presencial'}</small>
+                            </div>
+                            <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(w.precio).toFixed(2)}</span>
+                        `;
+                        workshopsList.appendChild(el);
+                    });
+                } else {
+                    workshopsList.innerHTML = '<div style="color: #64748b; font-style: italic; padding: 10px;">Ningún taller seleccionado.</div>';
+                }
+
+                const visitsList = document.getElementById('det-visits-list');
+                visitsList.innerHTML = '';
+                if (visits && visits.length > 0) {
+                    visits.forEach(v => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
+                        el.innerHTML = `
+                            <div>
+                                <strong style="color: #1e293b; display:block;">${v.nombre}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${v.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${v.instructor || 'N/A'} | <i class="fa-solid fa-building"></i> ${v.modalidad || 'Presencial'}</small>
+                            </div>
+                            <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(v.precio).toFixed(2)}</span>
+                        `;
+                        visitsList.appendChild(el);
+                    });
+                } else {
+                    visitsList.innerHTML = '<div style="color: #64748b; font-style: italic; padding: 10px;">Ninguna visita seleccionada.</div>';
+                }
+
+                // Tab 4: Facturación y Artículos
+                const billSection = document.getElementById('det-billing-section');
+                if (billing) {
+                    billSection.style.display = 'block';
+                    document.getElementById('det-bill-razon').textContent = billing.razon || 'N/A';
+                    document.getElementById('det-bill-rfc').textContent = billing.rfc || 'N/A';
+                    document.getElementById('det-bill-dir').textContent = billing.direccion || 'N/A';
+                    document.getElementById('det-bill-cp-ciudad').textContent = `C.P. ${billing.cp || 'N/A'}, ${billing.ciudad || 'N/A'}, ${billing.estado || 'N/A'}`;
+                    document.getElementById('det-bill-email').textContent = billing.correo || 'N/A';
+                } else {
+                    billSection.style.display = 'none';
+                }
+
+                const contribsList = document.getElementById('det-contribs-list');
+                contribsList.innerHTML = '';
+                if (contributions && contributions.length > 0) {
+                    document.getElementById('det-contribs-section').style.display = 'block';
+                    contributions.forEach(c => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 10px;';
+                        el.innerHTML = `
+                            <span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #e0f2fe; color: #0369a1; font-weight: 700; text-transform: uppercase;">${c.tipo || 'N/A'}</span>
+                            <strong style="color: #1e293b; display:block; margin: 6px 0;">${c.titulo || 'Sin título'}</strong>
+                            <small style="color: #64748b; display:block;"><i class="fa-solid fa-graduation-cap"></i> <strong>Área:</strong> ${c.area || 'N/A'} | <i class="fa-solid fa-book"></i> <strong>Revista / Memorias:</strong> ${c.revista || 'N/A'} | <i class="fa-solid fa-laptop"></i> <strong>Modalidad:</strong> ${c.modalidad || 'N/A'}</small>
+                        `;
+                        contribsList.appendChild(el);
+                    });
+                } else {
+                    document.getElementById('det-contribs-section').style.display = 'none';
+                }
+
+                let fallbackEl = document.getElementById('det-tab4-fallback');
+                if (!fallbackEl) {
+                    fallbackEl = document.createElement('div');
+                    fallbackEl.id = 'det-tab4-fallback';
+                    fallbackEl.style.cssText = 'padding: 30px; text-align: center; color: #64748b; font-style: italic;';
+                    fallbackEl.innerHTML = '<i class="fa-solid fa-folder-open" style="font-size: 2rem; display:block; margin-bottom: 8px; opacity: 0.5;"></i> Este usuario no solicitó facturación ni registró trabajos.';
+                    document.getElementById('tab-billing').appendChild(fallbackEl);
+                }
+
+                if (!billing && (!contributions || contributions.length === 0)) {
+                    fallbackEl.style.display = 'block';
+                } else {
+                    fallbackEl.style.display = 'none';
+                }
+
+                // Footer Estatus Pill and buttons
+                const statusLabel = document.getElementById('detailRegStatusLabel');
+                statusLabel.innerHTML = '';
+                const statusClass = data.status === 'aceptado' ? 'status-pill-success' : (data.status === 'denegado' ? 'status-pill-danger' : 'status-pill-warning');
+                const statusText = data.status ? data.status.toUpperCase() : 'PENDIENTE';
+                statusLabel.innerHTML = `<span style="color: #64748b; font-weight:600; font-size: 0.95rem; margin-right: 8px;">Estado actual:</span> <span class="status-pill ${statusClass}" style="font-size: 0.85rem; padding: 6px 12px;">${statusText}</span>`;
+
+                // Action Button — opens document review modal
+                const btnAccept = document.getElementById('btnDetailAccept');
+                btnAccept.onclick = () => window.openDocReview(data.folio, (data.nombre || '') + ' ' + (data.apellido || ''));
+
+                detailModal.style.display = 'block';
+
+            } catch (err) {
+                console.error("Error al obtener detalle del usuario:", err);
+                alert("No se pudo cargar la información completa de este usuario.");
+            }
+        };
+
+        // ─── DOCUMENT REVIEW MODAL ───────────────────────────────────────────────
+
+        const DOC_SPECS = [
+            { key: 'comprobante',    label: 'Comprobante de Pago',         icon: 'fa-file-invoice-dollar', color: '#0369a1', bg: '#e0f2fe' },
+            { key: 'identificacion', label: 'Identificación / Credencial', icon: 'fa-id-card',             color: '#be185d', bg: '#fdf2f8' },
+            { key: 'constancia',     label: 'Constancia Fiscal (RFC)',     icon: 'fa-file-contract',       color: '#15803d', bg: '#f0fdf4' },
+        ];
+
+        let reviewFolio = null;
+        let reviewDocsData = null;
+        let activeReviewTab = 1;
+
+        window.openDocReview = async (folio, userName) => {
+            reviewFolio = folio;
+            activeReviewTab = 1;
+            document.getElementById('docReviewTitle').textContent = userName.trim() || folio;
+            document.getElementById('docReviewBody').innerHTML =
+                '<div style="text-align:center;padding:40px;color:#64748b;"><i class="fa-solid fa-spinner fa-spin" style="font-size:2rem;"></i><p style="margin-top:12px;">Cargando documentos...</p></div>';
+            document.getElementById('docReviewModal').style.display = 'block';
+
+            try {
+                const res = await adminFetch(`php/api.php?action=get_doc_revisions&folio=${encodeURIComponent(folio)}&t=${Date.now()}`);
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error);
+                reviewDocsData = data.documents || {};
+                renderDocReview();
+            } catch (err) {
+                document.getElementById('docReviewBody').innerHTML =
+                    `<div style="text-align:center;padding:40px;color:#ef4444;"><i class="fa-solid fa-circle-exclamation" style="font-size:2rem;"></i><p>Error: ${err.message}</p></div>`;
+            }
+        };
+
+        const DOC_STATUS_MAP = {
+            aceptado:  { label: 'ACEPTADO',  cls: 'status-pill-success', icon: 'fa-circle-check' },
+            rechazado: { label: 'RECHAZADO', cls: 'status-pill-danger',  icon: 'fa-circle-xmark' },
+            pendiente: { label: 'PENDIENTE', cls: 'status-pill-warning', icon: 'fa-clock' },
+        };
+
+        // Ordinales en español, con concordancia de género
+        const ORDINALS_M = {1:'Primer',2:'Segundo',3:'Tercer',4:'Cuarto',5:'Quinto',6:'Sexto',7:'Séptimo',8:'Octavo',9:'Noveno',10:'Décimo'};
+        const ORDINALS_F = {1:'Primera',2:'Segunda',3:'Tercera',4:'Cuarta',5:'Quinta',6:'Sexta',7:'Séptima',8:'Octava',9:'Novena',10:'Décima'};
+        const ordinalEs = (n, gender) => (gender === 'f' ? ORDINALS_F : ORDINALS_M)[n] || `${n}°`;
+
+        // Extrae el número de folio para ordenar las "subidas"/compras cronológicamente
+        const folioNum = f => parseInt(String(f || '').replace(/\D/g, ''), 10) || 0;
+
+        // Dado un arreglo de documentos (con folio y tipo_doc), calcula a qué número
+        // de "compra" pertenece cada folio según el orden de sus comprobantes.
+        function buildPurchaseNumByFolio(docs) {
+            const comprobanteFolios = [...new Set(docs.filter(d => d.tipo_doc === 'comprobante').map(d => d.folio))]
+                .sort((a, b) => folioNum(a) - folioNum(b));
+            const map = {};
+            comprobanteFolios.forEach((folio, idx) => { map[folio] = idx + 1; });
+            return map;
+        }
+
+        function renderDocReview() {
+            const body = document.getElementById('docReviewBody');
+            body.innerHTML = '';
+
+            // Aplanar todos los documentos de todos los tipos en una sola lista
+            const allDocs = [];
+            DOC_SPECS.forEach(spec => {
+                (reviewDocsData[spec.key] || []).forEach(doc => allDocs.push(Object.assign({}, doc, { _spec: spec })));
+            });
+
+            if (allDocs.length === 0) {
+                body.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;"><i class="fa-solid fa-folder-open" style="font-size:2.5rem;opacity:0.4;"></i><p style="margin-top:12px;">Este usuario no ha subido ningún documento.</p></div>';
+                updateReviewProgress(0, 0);
+                return;
+            }
+
+            // Cada compra (registro inicial o "comprar más talleres/visitas") genera un
+            // folio nuevo y sube su propio comprobante (y, opcionalmente, su propio RFC,
+            // y en la primera compra también identificación si aplica). Agrupamos por
+            // folio para que cada "subida"/compra tenga su propia pestaña, en orden
+            // cronológico (1ra Subida, 2da Subida, ...).
+            const purchaseNumByFolio = buildPurchaseNumByFolio(allDocs);
+
+            const docsByFolio = {};
+            allDocs.forEach(doc => (docsByFolio[doc.folio] = docsByFolio[doc.folio] || []).push(doc));
+
+            const purchases = [...new Set(allDocs.map(d => d.folio))]
+                .sort((a, b) => folioNum(a) - folioNum(b))
+                .map(folio => ({ folio, num: purchaseNumByFolio[folio] || null, docs: docsByFolio[folio] }));
+
+            if (activeReviewTab < 1 || activeReviewTab > purchases.length) activeReviewTab = 1;
+
+            // ── Barra de pestañas: una por cada subida/compra ──────────────────
+            const tabBar = document.createElement('div');
+            tabBar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #e2e8f0;';
+            purchases.forEach((p, idx) => {
+                const tabNum = idx + 1;
+                const estados = p.docs.map(d => d.estado);
+                let dotColor = '#15803d', dotTitle = 'Todo aceptado';
+                if (estados.includes('rechazado')) { dotColor = '#b91c1c'; dotTitle = 'Tiene rechazos pendientes'; }
+                else if (estados.some(e => e !== 'aceptado')) { dotColor = '#92400e'; dotTitle = 'En revisión'; }
+
+                const label = p.num ? `${ordinalEs(p.num, 'f')} Subida` : 'Documentos del Registro';
+                const isActive = tabNum === activeReviewTab;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.onclick = () => { activeReviewTab = tabNum; renderDocReview(); };
+                btn.style.cssText = `padding:8px 16px;border-radius:8px;border:1px solid ${isActive ? '#0f4c75' : '#e2e8f0'};background:${isActive ? '#0f4c75' : 'white'};color:${isActive ? 'white' : '#1e293b'};font-weight:700;font-size:0.85rem;cursor:pointer;display:inline-flex;align-items:center;gap:8px;`;
+                btn.innerHTML = `${label} <span title="${dotTitle}" style="width:9px;height:9px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0;"></span>`;
+                tabBar.appendChild(btn);
+            });
+            body.appendChild(tabBar);
+
+            // ── Contenido de la pestaña activa ──────────────────────────────────
+            const active = purchases[activeReviewTab - 1];
+            const order = { identificacion: 0, comprobante: 1, constancia: 2 };
+            const sortedDocs = (active ? active.docs : []).slice().sort((a, b) => {
+                if (a._spec.key !== b._spec.key) return order[a._spec.key] - order[b._spec.key];
+                return new Date(a.fecha_subida) - new Date(b.fecha_subida);
+            });
+
+            const content = document.createElement('div');
+            content.style.cssText = 'display:flex;flex-direction:column;gap:16px;';
+
+            // Cuando un mismo tipo de documento tiene varias versiones dentro de la
+            // misma subida (p.ej. una rechazada + su corrección ya subida), se unen
+            // visualmente en una sola tarjeta (un contenedor con borde compartido)
+            // y la versión rechazada se etiqueta como "Versión anterior rechazada"
+            // para que se vea que ambas versiones están relacionadas.
+            const groups = [];
+            sortedDocs.forEach(doc => {
+                const lastGroup = groups[groups.length - 1];
+                if (lastGroup && lastGroup[0]._spec.key === doc._spec.key) lastGroup.push(doc);
+                else groups.push([doc]);
+            });
+
+            groups.forEach(group => {
+                const total = group.length;
+                const wrapper = total > 1 ? document.createElement('div') : null;
+                if (wrapper) wrapper.style.cssText = 'background:white;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;';
+
+                group.forEach((doc, idx) => {
+                    const n = purchaseNumByFolio[doc.folio];
+                    let label = doc._spec.label;
+                    if (n && doc._spec.key === 'comprobante') label = `${ordinalEs(n, 'm')} Comprobante de Pago`;
+                    else if (n && doc._spec.key === 'constancia') label = `RFC / Constancia Fiscal (${ordinalEs(n, 'f')} Compra)`;
+
+                    const isLast = idx === total - 1;
+                    if (total > 1 && !isLast && doc.estado === 'rechazado') {
+                        label += ` <span style="font-size:0.7rem;font-weight:700;color:#94a3b8;background:#f1f5f9;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;">Versión anterior rechazada</span>`;
+                    }
+
+                    // Bloqueo en cadena: una versión anterior no puede modificarse mientras
+                    // su reemplazo (la siguiente versión) ya tenga una decisión tomada
+                    // (aceptado o rechazado). Primero hay que devolver esa siguiente
+                    // versión a "Pendiente" para poder editar esta.
+                    const lockedByNext = total > 1 && !isLast && group[idx + 1].estado !== 'pendiente';
+
+                    const card = buildDocCard(label, doc._spec, doc, Object.assign(
+                        total > 1 ? { grouped: true, dividerTop: idx > 0 } : {},
+                        { locked: lockedByNext }
+                    ));
+                    if (wrapper) wrapper.appendChild(card); else content.appendChild(card);
+                });
+
+                if (wrapper) content.appendChild(wrapper);
+            });
+            body.appendChild(content);
+
+            // El progreso (X/Y) y el botón "Confirmar Aceptación Total" consideran
+            // TODO el historial del usuario, no solo la pestaña activa.
+            const accepted = allDocs.filter(d => d.estado === 'aceptado').length;
+            updateReviewProgress(accepted, allDocs.length);
+        }
+
+        // Genera la barra de acciones (Aceptar / Rechazar / Pendiente) para UN archivo
+        // específico. Cada archivo subido, sin importar su estado actual o si es el
+        // más reciente, puede editarse libremente a cualquier otro estado, salvo que
+        // esté bloqueado por estar conectado a una versión posterior ya evaluada.
+        function renderDocActionBar(doc, locked) {
+            const key = `doc-${doc.id}`;
+            const isAceptado  = doc.estado === 'aceptado';
+            const isRechazado = doc.estado === 'rechazado';
+            const isPendiente = !isAceptado && !isRechazado;
+
+            const btn = (label, icon, active, activeColor, activeBg, onclick, extraAttrs) => `
+                <button onclick="${locked ? '' : onclick}" ${locked ? 'disabled' : ''} ${extraAttrs || ''}
+                    style="padding:6px 12px;border:1px solid ${active ? activeColor : '#e2e8f0'};border-radius:6px;background:${active ? activeBg : 'white'};color:${active ? activeColor : '#64748b'};font-weight:700;cursor:${locked ? 'not-allowed' : 'pointer'};display:inline-flex;align-items:center;gap:5px;font-size:0.78rem;white-space:nowrap;${locked ? 'opacity:0.5;' : ''}">
+                    <i class="fa-solid ${icon}"></i> ${label}
+                </button>`;
+
+            return `
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                    ${btn('Aceptar', 'fa-check', isAceptado, '#15803d', '#dcfce7', `window.submitDocReview(${doc.id},'aceptado','')`)}
+                    ${btn('Rechazar', 'fa-xmark', isRechazado, '#b91c1c', '#fee2e2', `window.toggleRejectForm('${key}')`, `id="btn-rechazar-${key}"`)}
+                    ${btn('Pendiente', 'fa-clock', isPendiente, '#92400e', '#fef9c3', `window.submitDocReview(${doc.id},'pendiente',null)`)}
+                </div>
+                ${locked ? `<div style="margin-top:6px;font-size:0.8rem;color:#92400e;background:#fef9c3;padding:6px 10px;border-radius:6px;"><i class="fa-solid fa-lock"></i> Conectado con la versión más reciente. Para modificar este documento, primero cambia esa versión a "Pendiente".</div>` : ''}
+                ${isRechazado ? `<div style="margin-top:6px;font-size:0.8rem;color:#b91c1c;"><i class="fa-solid fa-comment-dots"></i> <strong>Motivo:</strong> ${doc.comentario || 'Sin motivo especificado'}</div>` : ''}
+                <div id="reject-form-${key}" style="display:none;margin-top:8px;">
+                    <textarea id="reject-comment-${key}" placeholder="Motivo del rechazo (opcional)..."
+                        style="width:100%;padding:8px;border:1px solid #fca5a5;border-radius:8px;font-size:0.85rem;resize:vertical;min-height:60px;box-sizing:border-box;font-family:inherit;display:block;"></textarea>
+                    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
+                        <button onclick="window.toggleRejectForm('${key}')"
+                            style="padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;background:white;color:#64748b;font-weight:600;cursor:pointer;font-size:0.8rem;">
+                            Cancelar
+                        </button>
+                        <button onclick="window.submitDocReview(${doc.id},'rechazado', document.getElementById('reject-comment-${key}').value)"
+                            style="padding:6px 14px;border:none;border-radius:8px;background:#ef4444;color:white;font-weight:700;cursor:pointer;font-size:0.8rem;">
+                            Confirmar Rechazo
+                        </button>
+                    </div>
+                </div>`;
+        }
+
+        // Construye una tarjeta completa (con imagen visible) para UN solo
+        // documento subido. Cada compra/RFC/identificación tiene su propia
+        // tarjeta — ya no existe un "historial" colapsado.
+        // Si `opts.grouped` es true, la tarjeta no dibuja su propio borde/esquinas
+        // (el contenedor del grupo los provee) para que varias versiones del mismo
+        // tipo de documento se vean unidas como una sola tarjeta.
+        function buildDocCard(label, spec, doc, opts = {}) {
+            const card = document.createElement('div');
+            card.id = `doc-card-${doc.id}`;
+
+            const st = DOC_STATUS_MAP[doc.estado] || DOC_STATUS_MAP.pendiente;
+            const isPdf = doc.archivo.toLowerCase().endsWith('.pdf');
+            const shortName = doc.archivo.replace(/^\d+_[^_]+_/, '');
+            const ext = doc.archivo.split('.').pop().toLowerCase();
+            const isImage = ['jpg','jpeg','png','gif','webp'].includes(ext);
+
+            card.style.cssText = opts.grouped
+                ? `background:white;${opts.dividerTop ? 'border-top:1px solid #e2e8f0;' : ''}`
+                : 'background:white;border-radius:12px;border:1px solid #e2e8f0;';
+            card.innerHTML = `
+                <div style="padding:16px 18px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;background:${spec.bg}20;">
+                    <div style="width:38px;height:38px;border-radius:8px;background:${spec.bg};display:flex;align-items:center;justify-content:center;color:${spec.color};font-size:1.1rem;flex-shrink:0;">
+                        <i class="fa-solid ${spec.icon}"></i>
+                    </div>
+                    <div style="flex-grow:1;min-width:0;">
+                        <p style="margin:0;font-weight:700;color:#1e293b;font-size:0.95rem;">${label}</p>
+                        <p style="margin:0;font-size:0.78rem;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${doc.archivo}">${shortName} · ${doc.fecha_subida}</p>
+                    </div>
+                    <span class="status-pill ${st.cls}" style="flex-shrink:0;font-size:0.75rem;padding:4px 10px;">
+                        <i class="fa-solid ${st.icon}"></i> ${st.label}
+                    </span>
+                </div>
+
+                ${isImage ? `
+                <div style="padding:12px 18px;background:#fafafa;border-bottom:1px solid #f1f5f9;text-align:center;">
+                    <a href="uploads/${doc.archivo}" target="_blank">
+                        <img src="uploads/${doc.archivo}" alt="${spec.label}"
+                             style="max-height:180px;max-width:100%;border-radius:6px;object-fit:contain;box-shadow:0 2px 8px rgba(0,0,0,0.08);"
+                             onerror="this.parentElement.innerHTML='<a href=\\'uploads/${doc.archivo}\\' target=\\'_blank\\' style=\\'color:${spec.color};font-weight:600;\\' ><i class=\\'fa-solid fa-file\\'></i> Ver archivo</a>'">
+                    </a>
+                </div>` : `
+                <div style="padding:12px 18px;background:#fafafa;border-bottom:1px solid #f1f5f9;">
+                    <a href="uploads/${doc.archivo}" target="_blank"
+                       style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;background:${spec.bg};color:${spec.color};border-radius:8px;font-weight:600;font-size:0.88rem;text-decoration:none;">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Abrir ${isPdf ? 'PDF' : 'Archivo'}
+                    </a>
+                </div>`}
+
+                <div style="padding:14px 18px;">
+                    ${renderDocActionBar(doc, opts.locked)}
+                </div>`;
+
+            return card;
+        }
+
+        function updateReviewProgress(accepted, total) {
+            document.getElementById('docReviewCount').textContent = `${accepted}/${total}`;
+            const btn = document.getElementById('btnFinalizarRevision');
+            if (total > 0 && accepted === total) {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+            } else {
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+            }
+        }
+
+        window.toggleRejectForm = (key) => {
+            const form = document.getElementById(`reject-form-${key}`);
+            const isHidden = form.style.display === 'none';
+            form.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) {
+                const ta = document.getElementById(`reject-comment-${key}`);
+                if (ta) ta.focus();
+            }
+        };
+
+        window.submitDocReview = async (id, estado, comentario) => {
+            const adminUser = sessionStorage.getItem('adminUsername') || 'admin';
+            try {
+                const res = await adminFetch('php/api.php?action=review_doc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, estado, comentario: comentario || null, revisado_por: adminUser })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error);
+
+                // Refresh document data from server
+                const res2 = await adminFetch(`php/api.php?action=get_doc_revisions&folio=${encodeURIComponent(reviewFolio)}&t=${Date.now()}`);
+                const data2 = await res2.json();
+                reviewDocsData = data2.documents || {};
+                renderDocReview();
+                renderItems(); // refresh main table status
+            } catch (err) {
+                alert('Error al guardar revisión: ' + err.message);
+            }
+        };
+
+
+        window.closeDocReviewModal = () => {
+            document.getElementById('docReviewModal').style.display = 'none';
+        };
+
+        document.getElementById('btnFinalizarRevision').addEventListener('click', async () => {
+            try {
+                const res = await adminFetch('php/api.php?action=update_reg_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folio: reviewFolio, status: 'aceptado' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.closeDocReviewModal();
+                    window.closeUserDetailModal();
+                    renderItems();
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        // ─── END DOCUMENT REVIEW ─────────────────────────────────────────────────
+
+        // Activar/Desactivar todos los talleres o visitas a la vez
+        toggleActiveBtn.addEventListener('click', async () => {
+            const targetActive = toggleActiveBtn.dataset.targetActive || '0';
+            const typeLabel = currentType === 'workshop' ? 'los talleres' : 'las visitas';
+            const actionLabel = targetActive === '1' ? 'activar' : 'desactivar';
+
+            if (!confirm(`¿Seguro que deseas ${actionLabel} TODOS ${typeLabel}? Esto afectará a todos los elementos existentes.`)) {
+                return;
+            }
+
+            try {
+                const response = await adminFetch(`php/api.php?action=toggle_category_active&type=${currentType}&active=${targetActive}`);
+                const result = await response.json();
+                if (result.success) {
+                    renderItems();
+                } else {
+                    alert('Error: ' + (result.error || 'No se pudo actualizar el estado.'));
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        // Initial Render — registrations is default, show download button and search
+        if (currentType === 'admins') {
+            menuItems.forEach(i => i.classList.remove('active'));
+            const adminsMenu = document.querySelector('.menu-item[data-type="admins"]');
+            if (adminsMenu) adminsMenu.classList.add('active');
+            pageTitle.textContent = 'Gestión de Administradores';
+            pageDescription.textContent = 'Administra las cuentas de administrador y sus permisos de acceso.';
+            openModalBtn.style.display = 'none';
+            downloadSvgBtn.style.display = 'none';
+            document.getElementById('searchBarWrapper').style.display = 'none';
+        } else {
+            downloadSvgBtn.style.display = 'flex';
+            document.getElementById('searchBarWrapper').style.display = 'block';
+        }
         renderItems();
+
+        // --- BUSCADOR ---
+        document.getElementById('regSearchInput').addEventListener('input', function () {
+            const q = this.value.trim().toLowerCase();
+            const rows = document.querySelectorAll('#itemsList tr');
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = !q || text.includes(q) ? '' : 'none';
+            });
+        });
+
+        // --- CSV DOWNLOAD ---
+        downloadSvgBtn.addEventListener('click', async () => {
+            downloadSvgBtn.disabled = true;
+            downloadSvgBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generando...';
+
+            try {
+                const res = await adminFetch(`php/api.php?action=get_full_registrations&t=${Date.now()}`);
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Error del servidor');
+                const regs = data.registrations || [];
+
+                const esc = val => {
+                    const str = String(val ?? '');
+                    return (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r'))
+                        ? `"${str.replace(/"/g, '""')}"` : str;
+                };
+
+                const headers = [
+                    'Folio', 'Concepto de Pago', 'Estatus', 'Fecha de Registro',
+                    'Nombre', 'Apellido', 'Correo', 'Teléfono',
+                    'Institución', 'Ciudad', 'Estado', 'País',
+                    'Tipo de Registro', 'Monto Total',
+                    'RFC', 'Razón Social', 'Domicilio Fiscal', 'CP Fiscal', 'Ciudad Fiscal', 'Estado Fiscal', 'Correo Facturación',
+                    'Talleres (nombre, horario, precio)', 'Visitas Industriales (nombre, horario, precio)',
+                    'Contribuciones (Título - Tipo - Área - Modalidad - Revista)',
+                    'Comprobantes de Pago', 'Identificaciones', 'Constancias Fiscales'
+                ];
+
+                const rows = regs.map(item => {
+                    let conceptId = item.concept || 'N/A';
+                    const m = (item.concept || '').match(/^\d+/);
+                    if (m) conceptId = m[0].padStart(4, '0');
+
+                    return [
+                        item.folio || '',
+                        conceptId,
+                        item.status || 'pendiente',
+                        item.date_registered || '',
+                        item.nombre || '',
+                        item.apellido || '',
+                        item.email || '',
+                        item.telefono || '',
+                        item.institucion || '',
+                        item.ciudad || '',
+                        item.estado || '',
+                        item.pais || '',
+                        item.regType || '',
+                        item.total || '$0.00',
+                        item.rfc || '',
+                        item.razon_social || '',
+                        item.domicilio_fiscal || '',
+                        item.cp || '',
+                        item.ciudad_fiscal || '',
+                        item.estado_fiscal || '',
+                        item.correo_facturacion || '',
+                        item.talleres || '',
+                        item.visitas || '',
+                        item.contribuciones || '',
+                        item.comprobante || '',
+                        item.identificacion || '',
+                        item.constancia || ''
+                    ].map(esc).join(',');
+                });
+
+                const csv = '﻿' + [headers.join(','), ...rows].join('\r\n');
+
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `concei2026_usuarios_${Date.now()}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                alert('Error al generar el CSV: ' + err.message);
+            } finally {
+                downloadSvgBtn.disabled = false;
+                downloadSvgBtn.innerHTML = '<i class="fa-solid fa-file-csv"></i> Descargar CSV';
+            }
+        });
     }
 });

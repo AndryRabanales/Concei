@@ -75,26 +75,45 @@
                 <i class="fa-solid fa-circle-check"></i>
             </div>
             <h1>¡Registro Exitoso!</h1>
-            <p>Tu solicitud ha sido procesada correctamente en nuestro sistema.</p>
 
             <div class="folio-badge" id="folioDisplay">CONCEI-2026-XXXX</div>
 
             <div class="summary-details">
                 <p><span>Nombre:</span> <span id="nameDisplay">---</span></p>
-                <p><span>Correo (Usuario):</span> <span id="emailDisplay">---</span></p>
-                <p><span>Total Registrado:</span> <span id="totalDisplay">---</span></p>
-                <p><span>Fecha de Registro:</span> <span id="dateDisplay">---</span></p>
+                <p><span>Correo:</span> <span id="emailDisplay">---</span></p>
+                <p><span>Fecha:</span> <span id="dateDisplay">---</span></p>
             </div>
 
-            <div style="margin-top: 30px; display: flex; gap: 15px; justify-content: center;">
-                <a href="index.html" class="submit-btn"
-                    style="text-decoration: none; background-color: var(--primary-color);">
-                    <i class="fa-solid fa-house"></i> Ir al Inicio
+            <!-- Tabla de compra -->
+            <div id="purchaseTable" style="margin-top: 20px; text-align: left; display: none;">
+                <table style="width:100%; border-collapse: collapse; font-size: 0.9rem; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                    <thead>
+                        <tr style="background: #1e3a8a; color: white;">
+                            <th style="padding: 10px 14px; text-align: left;">Concepto</th>
+                            <th style="padding: 10px 14px; text-align: right;">Importe</th>
+                        </tr>
+                    </thead>
+                    <tbody id="purchaseRows"></tbody>
+                    <tfoot>
+                        <tr style="background: #f1f5f9; font-weight: 700;">
+                            <td style="padding: 10px 14px;">Total</td>
+                            <td style="padding: 10px 14px; text-align: right; color: #1e3a8a;" id="totalDisplay">---</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+
+            <div style="margin-top: 22px; padding: 14px 18px; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 12px; text-align: left;">
+                <p style="margin: 0; color: #b91c1c; font-size: 0.92rem; line-height: 1.6; font-weight: 600;">
+                    <i class="fa-solid fa-circle-exclamation" style="margin-right: 6px;"></i>
+                    Regresa a tu sesión para consultar el estado de tus documentos. Ahí podrás ver si han sido <strong>aceptados</strong>, están <strong>en revisión</strong> o requieren corrección.
+                </p>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 15px; justify-content: center;">
+                <a href="registro.html" class="submit-btn" style="text-decoration: none; background-color: var(--primary-color);">
+                    <i class="fa-solid fa-file-circle-check"></i> Ver estado de mis documentos
                 </a>
-                <button onclick="window.print()" class="submit-btn"
-                    style="text-decoration: none; background-color: #6b7280;">
-                    <i class="fa-solid fa-print"></i> Imprimir Comprobante
-                </button>
             </div>
         </section>
     </div>
@@ -103,15 +122,43 @@
         document.addEventListener('DOMContentLoaded', () => {
             const data = JSON.parse(localStorage.getItem('lastRegistration') || '{}');
 
-            if (data.fullName) {
-                document.getElementById('nameDisplay').textContent = data.fullName;
-                document.getElementById('emailDisplay').textContent = data.email;
-                document.getElementById('totalDisplay').textContent = data.total;
-                document.getElementById('dateDisplay').textContent = data.date;
-                document.getElementById('folioDisplay').textContent = data.folio;
-            } else {
-                // Si no hay datos, probablemente el usuario entró directamente
+            if (!data.folio) {
                 window.location.href = 'crear-cuenta.html';
+                return;
+            }
+
+            document.getElementById('nameDisplay').textContent = data.fullName || '---';
+            document.getElementById('emailDisplay').textContent = data.email;
+            document.getElementById('dateDisplay').textContent = data.date;
+            document.getElementById('folioDisplay').textContent = data.folio;
+            document.getElementById('totalDisplay').textContent = data.total;
+
+            // Tabla de compra
+            const tbody = document.getElementById('purchaseRows');
+            const table = document.getElementById('purchaseTable');
+            let rows = '';
+
+            // Fila de tipo de registro (solo primer registro)
+            if (!data.isReturning && data.regTypeLabel && data.regTypePrice > 0) {
+                rows += `<tr>
+                    <td style="padding: 8px 14px; border-bottom: 1px solid #e2e8f0;">Registro — ${data.regTypeLabel}</td>
+                    <td style="padding: 8px 14px; border-bottom: 1px solid #e2e8f0; text-align:right;">$${data.regTypePrice.toFixed(2)}</td>
+                </tr>`;
+            }
+
+            // Talleres y visitas
+            if (data.purchaseItems && data.purchaseItems.length > 0) {
+                data.purchaseItems.forEach(item => {
+                    rows += `<tr>
+                        <td style="padding: 8px 14px; border-bottom: 1px solid #e2e8f0;">${item.tipo}: ${item.nombre}</td>
+                        <td style="padding: 8px 14px; border-bottom: 1px solid #e2e8f0; text-align:right;">$${item.precio.toFixed(2)}</td>
+                    </tr>`;
+                });
+            }
+
+            if (rows) {
+                tbody.innerHTML = rows;
+                table.style.display = 'block';
             }
         });
     </script>

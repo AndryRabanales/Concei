@@ -15,20 +15,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('email').value;
             const password = passwordInput.value;
 
-            // MOCK CREDENTIALS FOR TESTING
-            if (email === 'admin@dranabel.com' && password === 'DranabelAdmin2026!') {
-                sessionStorage.setItem('isAdminLoggedIn', 'true');
-                window.location.href = 'admin-dashboard.html?v=6';
-            } else {
+            try {
+                const response = await fetch('php/api.php?action=admin_login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: email, password: password })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    sessionStorage.setItem('isAdminLoggedIn', 'true');
+                    sessionStorage.setItem('adminUsername', result.admin.username);
+                    sessionStorage.setItem('adminRol', result.admin.rol);
+                    window.location.href = 'admin-dashboard.html?v=7';
+                } else {
+                    errorMessage.style.display = 'block';
+                    setTimeout(() => {
+                        errorMessage.style.display = 'none';
+                    }, 3000);
+                }
+            } catch (err) {
+                console.error('Error de login:', err);
                 errorMessage.style.display = 'block';
-                setTimeout(() => {
-                    errorMessage.style.display = 'none';
-                }, 3000);
+                setTimeout(() => { errorMessage.style.display = 'none'; }, 3000);
             }
         });
     }
@@ -45,14 +59,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- DASHBOARD LOGIC ---
     if (isDashboard) {
         const itemsList = document.getElementById('itemsList');
-
+        
         // --- Global Event Delegation (Moved to Top for Priority) ---
         document.addEventListener('click', (e) => {
             const btn = e.target.closest('.action-btn');
             if (!btn) return;
-
+            
             e.preventDefault();
-
+            
             const action = btn.dataset.action;
             const id = btn.dataset.id;
             const type = btn.dataset.type;
@@ -68,6 +82,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.deleteReg(id);
             } else if (action === 'updateRegStatus') {
                 window.updateRegStatus(id, status);
+            } else if (action === 'viewUserDetail') {
+                window.viewUserDetail(id);
             }
         });
         const menuItems = document.querySelectorAll('.menu-item');
@@ -171,10 +187,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 thead.innerHTML = `<th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>ID</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
             }
-
+ 
             items.forEach(item => {
                 const tr = document.createElement('tr');
-
+                
                 // Resaltar si es el elemento recién guardado o editado
                 const isHighlighted = highlightId && (item.id === highlightId || item.folio === highlightId);
                 if (isHighlighted) {
@@ -208,11 +224,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             ${item.comprobante ? `<a href="uploads/${item.comprobante}" target="_blank" class="btn-icon btn-edit" title="Ver Comprobante de Pago" style="background: #e0f2fe; color: #0369a1;"><i class="fa-solid fa-file-invoice-dollar"></i></a>` : ''}
                             ${item.identificacion ? `<a href="uploads/${item.identificacion}" target="_blank" class="btn-icon btn-edit" title="Ver ID Estudiante" style="background: #fdf2f8; color: #be185d;"><i class="fa-solid fa-id-card"></i></a>` : ''}
                             ${item.constancia ? `<a href="uploads/${item.constancia}" target="_blank" class="btn-icon btn-edit" title="Ver Constancia RFC" style="background: #f0fdf4; color: #15803d;"><i class="fa-solid fa-file-contract"></i></a>` : ''}
+                            ${item.comprobante_adicional ? `<a href="uploads/${item.comprobante_adicional}" target="_blank" class="btn-icon btn-edit" title="Ver Comprobante de Pago Adicional" style="background: #ffedd5; color: #c2410c;"><i class="fa-solid fa-receipt"></i></a>` : ''}
+                            ${item.constancia_adicional ? `<a href="uploads/${item.constancia_adicional}" target="_blank" class="btn-icon btn-edit" title="Ver Constancia RFC Adicional" style="background: #f3e8ff; color: #6b21a8;"><i class="fa-solid fa-file-signature"></i></a>` : ''}
                         </td>
                         <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px;">${item.concept || 'N/A'}</code></td>
                         <td style="font-weight: 500;">${item.total || '$0.00'}</td>
                         <td><span class="status-pill ${statusClass}">${statusText}</span></td>
                         <td class="actions">
+                            <button class="btn-icon btn-edit action-btn" style="background: #e0f2fe; color: #0369a1;" data-action="viewUserDetail" data-id="${item.folio}" title="Ver Detalle Completo"><i class="fa-solid fa-eye"></i></button>
                             <button class="btn-icon btn-edit action-btn" style="background: #dcfce7; color: #15803d;" data-action="updateRegStatus" data-id="${item.folio}" data-status="aceptado" title="Aceptar Pago"><i class="fa-solid fa-check"></i></button>
                             <button class="btn-icon btn-delete action-btn" data-action="updateRegStatus" data-id="${item.folio}" data-status="denegado" title="Denegar Pago"><i class="fa-solid fa-xmark"></i></button>
                             <button class="btn-icon btn-delete action-btn" style="background: #fca5a5; color: #7f1d1d;" data-action="deleteReg" data-id="${item.folio}" title="Eliminar Registro Permanente"><i class="fa-solid fa-trash"></i></button>
@@ -238,7 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </td>
                         <td>
                             <span style="font-weight: 600; display:block;">$${parseFloat(item.price).toFixed(2)}</span>
-                            <small style="color: ${(item.cupo_actual || 0) >= (item.capacity || 0) ? '#ef4444' : '#475569'}; font-weight: ${(item.cupo_actual || 0) >= (item.capacity || 0) ? 'bold' : 'normal'};">
+                            <small style="color: ${ (item.cupo_actual || 0) >= (item.capacity || 0) ? '#ef4444' : '#475569' }; font-weight: ${ (item.cupo_actual || 0) >= (item.capacity || 0) ? 'bold' : 'normal' };">
                                 <i class="fa-solid fa-user-group"></i> ${item.cupo_actual || 0} / ${item.capacity || 0}
                             </small>
                         </td>
@@ -270,7 +289,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     openModalBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Agregar Visita';
                 } else if (currentType === 'registrations') {
                     pageTitle.textContent = 'Usuarios Registrados';
-                    pageDescription.textContent = 'Gestiona los registros, valida pagos y actualiza el estatus de los asistentes.';
+                    pageDescription.textContent = 'Gestiona los registros, valida pagos y actualiza el estatus de los usuarios.';
                     openModalBtn.style.display = 'none';
                 } else {
                     pageTitle.textContent = 'Códigos de Registro';
@@ -294,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
             itemForm.reset();
             document.getElementById('itemId').value = '';
             document.getElementById('itemId').disabled = false;
-
+            
             // Limpiar contador de cupo actual al agregar nuevo
             const currentVal = document.getElementById('itemCurrentValue');
             if (currentVal) currentVal.value = '0';
@@ -326,7 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 student_external: parseFloat(document.getElementById('price_student_external').value) || 0,
                 student_uady: parseFloat(document.getElementById('price_student_uady').value) || 0
             };
-
+            
             const response = await fetch('php/api.php?action=update_settings', {
                 method: 'POST',
                 body: JSON.stringify(prices)
@@ -355,7 +374,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('itemDependency').value = item.dependency || '';
                 document.getElementById('itemModality').value = item.modality || 'Presencial';
                 document.getElementById('itemCapacity').value = item.capacity || 0;
-
+                
                 // Nuevo: Mostrar cupo actual (solo lectura en modal)
                 const capacityGroup = document.getElementById('itemCapacity').parentElement;
                 let currentGroup = document.getElementById('itemCurrentGroup');
@@ -378,7 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.deleteItem = async (id, type) => {
             const actualType = type || currentType;
-            if (confirm(`¿Estás seguro de que deseas eliminar este elemento?`)) {
+            if (confirm(`¿Estás seguro de que deseas eliminar este elemento? (ID: ${id}, Tipo: ${actualType})`)) {
                 const response = await fetch(`php/api.php?action=delete_item&id=${id}&type=${actualType}&t=${Date.now()}`);
                 const result = await response.json();
                 if (result.success) {
@@ -418,7 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 modal.style.display = 'none';
                 highlightId = itemData.id; // Guardar ID para resaltar
                 renderItems();
-
+                
                 // Limpiar el resaltado después de 6 segundos
                 setTimeout(() => {
                     highlightId = null;
@@ -499,7 +518,247 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // delegation listener moved to top
+        // --- TABS CONTROL FOR DETAIL MODAL ---
+        window.switchDetailTab = (tabName) => {
+            // Hide all tab contents
+            document.querySelectorAll('.detail-tab-content').forEach(el => {
+                el.style.display = 'none';
+            });
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.detail-tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            // Show selected tab content
+            const targetTab = document.getElementById('tab-' + tabName);
+            if (targetTab) {
+                targetTab.style.display = 'block';
+            }
+            // Add active class to clicked button
+            const btns = document.querySelectorAll('.detail-tab-btn');
+            btns.forEach(btn => {
+                if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabName)) {
+                    btn.classList.add('active');
+                }
+            });
+        };
+
+        window.closeUserDetailModal = () => {
+            const modal = document.getElementById('userDetailModal');
+            if (modal) modal.style.display = 'none';
+        };
+
+        window.viewUserDetail = async (folio) => {
+            const detailModal = document.getElementById('userDetailModal');
+            if (!detailModal) return;
+
+            // Reset to first tab
+            window.switchDetailTab('personal');
+
+            try {
+                const response = await fetch(`php/api.php?action=get_registration_detail&folio=${encodeURIComponent(folio)}&t=${Date.now()}`);
+                const result = await response.json();
+
+                if (!result.success) {
+                    alert('Error al cargar detalles: ' + result.error);
+                    return;
+                }
+
+                const data = result.main;
+                const billing = result.billing;
+                const workshops = result.workshops;
+                const visits = result.visits;
+                const contributions = result.contributions;
+
+                // Folio and Name in header
+                document.getElementById('detailUserFolio').textContent = data.folio;
+                document.getElementById('detailUserName').textContent = (data.nombre || '') + ' ' + (data.apellido || '');
+
+                // Tab 1: Datos Personales
+                document.getElementById('det-fullname').textContent = (data.nombre || 'N/A') + ' ' + (data.apellido || 'N/A');
+                document.getElementById('det-email').textContent = data.email || 'N/A';
+                document.getElementById('det-institution').textContent = data.institucion || 'N/A';
+                document.getElementById('det-city').textContent = data.ciudad || 'N/A';
+                document.getElementById('det-location').textContent = (data.estado ? data.estado + ', ' : '') + (data.pais || 'N/A');
+
+                // Tab 2: Pago y Documentos
+                const regTypeNames = {
+                    'general': 'Público General / Profesional',
+                    'student_external': 'Estudiante Externo',
+                    'student_uady': 'Estudiante UADY',
+                    'code_access': 'Acceso Especial por Código / Convenio'
+                };
+                document.getElementById('det-regtype').textContent = regTypeNames[data.regType] || data.regType || 'N/A';
+                document.getElementById('det-total').textContent = data.total || '$0.00';
+                document.getElementById('det-concept').textContent = data.concept || 'N/A';
+
+                // Render Documents
+                const docsContainer = document.getElementById('det-documents-container');
+                docsContainer.innerHTML = '';
+
+                const docSpecs = [
+                    { file: data.comprobante, title: 'Comprobante de Pago Base', bg: '#e0f2fe', color: '#0369a1', icon: 'fa-file-invoice-dollar' },
+                    { file: data.identificacion, title: 'Credencial Estudiante', bg: '#fdf2f8', color: '#be185d', icon: 'fa-id-card' },
+                    { file: data.constancia, title: 'Constancia Situación Fiscal (RFC)', bg: '#f0fdf4', color: '#15803d', icon: 'fa-file-contract' },
+                    { file: data.comprobante_adicional, title: 'Comprobante Adicional (Talleres)', bg: '#ffedd5', color: '#c2410c', icon: 'fa-receipt' },
+                    { file: data.constancia_adicional, title: 'RFC Adicional (Factura)', bg: '#f3e8ff', color: '#6b21a8', icon: 'fa-file-signature' }
+                ];
+
+                let hasDocs = false;
+                docSpecs.forEach(spec => {
+                    if (spec.file) {
+                        hasDocs = true;
+                        const docEl = document.createElement('a');
+                        docEl.href = `uploads/${spec.file}`;
+                        docEl.target = '_blank';
+                        docEl.style.cssText = `
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            padding: 12px 15px;
+                            border-radius: 8px;
+                            background: ${spec.bg};
+                            color: ${spec.color};
+                            text-decoration: none;
+                            font-weight: 600;
+                            font-size: 0.9rem;
+                            border: 1px solid rgba(0,0,0,0.05);
+                            transition: transform 0.2s, box-shadow 0.2s;
+                        `;
+                        docEl.onmouseover = () => {
+                            docEl.style.transform = 'translateY(-2px)';
+                            docEl.style.boxShadow = '0 4px 6px rgba(0,0,0,0.05)';
+                        };
+                        docEl.onmouseout = () => {
+                            docEl.style.transform = 'translateY(0)';
+                            docEl.style.boxShadow = 'none';
+                        };
+                        docEl.innerHTML = `
+                            <div style="font-size: 1.5rem;"><i class="fa-solid ${spec.icon}"></i></div>
+                            <div style="flex-grow: 1; text-align: left;">
+                                <span style="display:block; font-size: 0.85rem; font-weight: 600; opacity: 0.95;">${spec.title}</span>
+                                <span style="display:block; font-size: 0.75rem; opacity: 0.7; word-break: break-all;">${spec.file.substring(spec.file.indexOf('_') + 1)}</span>
+                            </div>
+                            <div><i class="fa-solid fa-arrow-up-right-from-square"></i></div>
+                        `;
+                        docsContainer.appendChild(docEl);
+                    }
+                });
+
+                if (!hasDocs) {
+                    docsContainer.innerHTML = `
+                        <div style="grid-column: span 2; padding: 20px; text-align: center; color: #64748b; font-style: italic;">
+                            <i class="fa-solid fa-folder-open" style="font-size: 2rem; display:block; margin-bottom: 8px; opacity: 0.5;"></i>
+                            No se cargó ningún documento para este usuario.
+                        </div>
+                    `;
+                }
+
+                // Tab 3: Talleres y Visitas
+                const workshopsList = document.getElementById('det-workshops-list');
+                workshopsList.innerHTML = '';
+                if (workshops && workshops.length > 0) {
+                    workshops.forEach(w => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
+                        el.innerHTML = `
+                            <div>
+                                <strong style="color: #1e293b; display:block;">${w.nombre}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${w.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${w.instructor || 'Instructor por definir'} | <i class="fa-solid fa-laptop"></i> ${w.modalidad || 'Presencial'}</small>
+                            </div>
+                            <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(w.precio).toFixed(2)}</span>
+                        `;
+                        workshopsList.appendChild(el);
+                    });
+                } else {
+                    workshopsList.innerHTML = '<div style="color: #64748b; font-style: italic; padding: 10px;">Ningún taller seleccionado.</div>';
+                }
+
+                const visitsList = document.getElementById('det-visits-list');
+                visitsList.innerHTML = '';
+                if (visits && visits.length > 0) {
+                    visits.forEach(v => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
+                        el.innerHTML = `
+                            <div>
+                                <strong style="color: #1e293b; display:block;">${v.nombre}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${v.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${v.instructor || 'N/A'} | <i class="fa-solid fa-building"></i> ${v.modalidad || 'Presencial'}</small>
+                            </div>
+                            <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(v.precio).toFixed(2)}</span>
+                        `;
+                        visitsList.appendChild(el);
+                    });
+                } else {
+                    visitsList.innerHTML = '<div style="color: #64748b; font-style: italic; padding: 10px;">Ninguna visita seleccionada.</div>';
+                }
+
+                // Tab 4: Facturación y Artículos
+                const billSection = document.getElementById('det-billing-section');
+                if (billing) {
+                    billSection.style.display = 'block';
+                    document.getElementById('det-bill-razon').textContent = billing.razon || 'N/A';
+                    document.getElementById('det-bill-rfc').textContent = billing.rfc || 'N/A';
+                    document.getElementById('det-bill-dir').textContent = billing.direccion || 'N/A';
+                    document.getElementById('det-bill-cp-ciudad').textContent = `C.P. ${billing.cp || 'N/A'}, ${billing.ciudad || 'N/A'}, ${billing.estado || 'N/A'}`;
+                    document.getElementById('det-bill-email').textContent = billing.correo || 'N/A';
+                } else {
+                    billSection.style.display = 'none';
+                }
+
+                const contribsList = document.getElementById('det-contribs-list');
+                contribsList.innerHTML = '';
+                if (contributions && contributions.length > 0) {
+                    document.getElementById('det-contribs-section').style.display = 'block';
+                    contributions.forEach(c => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 10px;';
+                        el.innerHTML = `
+                            <span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #e0f2fe; color: #0369a1; font-weight: 700; text-transform: uppercase;">${c.tipo || 'N/A'}</span>
+                            <strong style="color: #1e293b; display:block; margin: 6px 0;">${c.titulo || 'Sin título'}</strong>
+                            <small style="color: #64748b; display:block;"><i class="fa-solid fa-graduation-cap"></i> <strong>Área:</strong> ${c.area || 'N/A'} | <i class="fa-solid fa-book"></i> <strong>Revista / Memorias:</strong> ${c.revista || 'N/A'}</small>
+                        `;
+                        contribsList.appendChild(el);
+                    });
+                } else {
+                    document.getElementById('det-contribs-section').style.display = 'none';
+                }
+
+                // Footer Estatus Pill and buttons
+                const statusLabel = document.getElementById('detailRegStatusLabel');
+                statusLabel.innerHTML = '';
+                const statusClass = data.status === 'aceptado' ? 'status-pill-success' : (data.status === 'denegado' ? 'status-pill-danger' : 'status-pill-warning');
+                const statusText = data.status ? data.status.toUpperCase() : 'PENDIENTE';
+                statusLabel.innerHTML = `<span style="color: #64748b; font-weight:600; font-size: 0.95rem; margin-right: 8px;">Estado actual:</span> <span class="status-pill ${statusClass}" style="font-size: 0.85rem; padding: 6px 12px;">${statusText}</span>`;
+
+                // Action Buttons
+                const btnAccept = document.getElementById('btnDetailAccept');
+                const btnDeny = document.getElementById('btnDetailDeny');
+
+                btnAccept.onclick = async () => {
+                    btnAccept.disabled = true;
+                    btnAccept.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Procesando...';
+                    await window.updateRegStatus(data.folio, 'aceptado');
+                    window.closeUserDetailModal();
+                    btnAccept.disabled = false;
+                    btnAccept.innerHTML = '<i class="fa-solid fa-check"></i> Aceptar y Confirmar Todo';
+                };
+
+                btnDeny.onclick = async () => {
+                    btnDeny.disabled = true;
+                    btnDeny.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Procesando...';
+                    await window.updateRegStatus(data.folio, 'denegado');
+                    window.closeUserDetailModal();
+                    btnDeny.disabled = false;
+                    btnDeny.innerHTML = '<i class="fa-solid fa-xmark"></i> Denegar Registro';
+                };
+
+                detailModal.style.display = 'block';
+
+            } catch (err) {
+                console.error("Error al obtener detalle del usuario:", err);
+                alert("No se pudo cargar la información completa de este usuario.");
+            }
+        };
 
         // Initial Render
         renderItems();

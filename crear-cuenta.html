@@ -39,8 +39,7 @@
                     <h2>Crear Cuenta</h2>
                 </div>
                 <div class="card-body">
-                    <p class="info-text">Estos datos te permitirán acceder al portal una vez registrado. Tu correo y
-                        teléfono serán usados como métodos de recuperación de contraseña.</p>
+                    <p class="info-text">Estos datos te permitirán acceder al portal una vez registrado.</p>
 
                     <div class="form-group">
                         <label for="email">Email (Usuario) *</label>
@@ -48,7 +47,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="cellphone">Teléfono (Recuperación)</label>
+                        <label for="cellphone">Teléfono</label>
                         <input type="tel" id="cellphone" name="cellphone">
                     </div>
 
@@ -102,7 +101,11 @@
                     alert('¡Cuenta creada con éxito! Ahora puedes completar tu registro.');
                     window.location.href = 'registro.html';
                 } else {
-                    alert('Error: ' + result.error);
+                    if (result.error === 'correo_duplicado') {
+                        showErrorModal(email);
+                    } else {
+                        alert('Error: ' + result.error);
+                    }
                 }
             } catch (error) {
                 console.error('Error:', error);
@@ -113,7 +116,54 @@
             }
         });
 
+        function showErrorModal(email) {
+            const modal = document.getElementById('errorModal');
+            document.getElementById('errorTargetEmail').textContent = email;
+            modal.style.display = 'flex';
+            modal.style.pointerEvents = 'auto';
+            setTimeout(() => {
+                modal.style.opacity = '1';
+                modal.firstElementChild.style.transform = 'scale(1)';
+            }, 50);
+        }
+
+        function closeErrorModal() {
+            const modal = document.getElementById('errorModal');
+            modal.style.opacity = '0';
+            modal.style.pointerEvents = 'none';
+            modal.firstElementChild.style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                modal.style.display = 'none';
+            }, 300);
+        }
+
+        document.getElementById('closeErrorModalBtn').addEventListener('click', closeErrorModal);
     </script>
+
+    <!-- Modal de Error Premium -->
+    <div id="errorModal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(15, 23, 42, 0.6); backdrop-filter: blur(8px); align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; pointer-events: none;">
+        <div style="background: white; border-radius: 16px; width: 90%; max-width: 450px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1); overflow: hidden; transform: scale(0.9); transition: transform 0.3s ease; border: 1px solid rgba(226, 232, 240, 0.8);">
+            <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px; text-align: center; color: white; position: relative;">
+                <div style="font-size: 3.5rem; margin-bottom: 15px;">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                </div>
+                <h3 style="margin: 0; font-size: 1.5rem; font-weight: 700;">¡Correo en Uso!</h3>
+            </div>
+            <div style="padding: 30px; text-align: center;">
+                <p style="color: #475569; font-size: 1rem; line-height: 1.6; margin: 0 0 25px 0;">
+                    El correo electrónico <strong id="errorTargetEmail" style="color: #0f172a; word-break: break-all;"></strong> ya se encuentra registrado en nuestra plataforma.
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <a href="index.html" style="background: var(--primary-color, #0284c7); color: white; padding: 12px 20px; border-radius: 8px; font-weight: 600; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgb(2 132 199 / 0.3);">
+                        <i class="fa-solid fa-right-to-bracket"></i> Iniciar Sesión
+                    </a>
+                    <button id="closeErrorModalBtn" style="background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; padding: 12px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;">
+                        Intentar con otro correo
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

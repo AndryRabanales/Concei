@@ -1,7 +1,7 @@
 <?php
 // Configuración de la base de datos (XAMPP)
 $host = 'localhost';
-$dbname = 'dranabel_db';
+$dbname = 'concei_db';
 $username = 'root';
 $password = '';
 
