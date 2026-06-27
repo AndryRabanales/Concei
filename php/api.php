@@ -143,14 +143,24 @@ switch ($action) {
 
                 // Get personal info (including e.concepto to preserve original concept format if needed)
                 $stmtU = $pdo->prepare("
-                    SELECT p.*, e.tipo as regType, e.concepto 
-                    FROM reg_personal p 
-                    JOIN reg_inscripciones i ON p.folio = i.folio 
+                    SELECT p.*, e.tipo as regType, e.concepto
+                    FROM reg_personal p
+                    JOIN reg_inscripciones i ON p.folio = i.folio
                     JOIN reg_evento e ON i.folio = e.folio
                     WHERE i.correo = ?
                 ");
                 $stmtU->execute([$email]);
                 $userInfo = $stmtU->fetch(PDO::FETCH_ASSOC);
+
+                // Contribuciones del usuario registradas
+                $stmtContribs = $pdo->prepare("
+                    SELECT c.titulo, c.tipo, c.area, c.modalidad, c.revista
+                    FROM reg_contribuciones c
+                    JOIN reg_inscripciones i ON c.folio = i.folio
+                    WHERE i.correo = ?
+                ");
+                $stmtContribs->execute([$email]);
+                $userContributions = $stmtContribs->fetchAll(PDO::FETCH_ASSOC);
             }
 
             echo json_encode([
@@ -161,6 +171,7 @@ switch ($action) {
                 'code' => $codes,
                 'purchased' => $purchased,
                 'userInfo' => $userInfo,
+                'contributions' => $userContributions ?? [],
                 'accountId' => $accountId
             ]);
         } catch (Exception $e) {
@@ -323,9 +334,9 @@ switch ($action) {
             $stmtFact->execute([$folio]);
             $billingData = $stmtFact->fetch();
 
-            // 3. Talleres y Visitas registradas
+            // 3. Talleres y Visitas registradas (DISTINCT para evitar duplicados por data corruption)
             $stmtTalleres = $pdo->prepare("
-                SELECT t.id, t.nombre, t.horario, t.instructor, t.modalidad, t.precio
+                SELECT DISTINCT t.id, t.nombre, t.horario, t.instructor, t.modalidad, t.precio
                 FROM reg_evento_detalles d
                 JOIN cat_talleres t ON d.item_id = t.id
                 WHERE d.folio = ? AND d.tipo_item = 'taller'
@@ -334,7 +345,7 @@ switch ($action) {
             $workshops = $stmtTalleres->fetchAll();
 
             $stmtVisitas = $pdo->prepare("
-                SELECT v.id, v.nombre, v.horario, v.instructor, v.modalidad, v.precio
+                SELECT DISTINCT v.id, v.nombre, v.horario, v.instructor, v.modalidad, v.precio
                 FROM reg_evento_detalles d
                 JOIN cat_visitas v ON d.item_id = v.id
                 WHERE d.folio = ? AND d.tipo_item = 'visita'
@@ -362,6 +373,108 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
         break;
+    case 'get_my_contributions':
+        $email = $_GET['email'] ?? '';
+        if (empty($email)) { echo json_encode(['success' => false, 'error' => 'Email requerido']); break; }
+        try {
+            $stmt = $pdo->prepare("
+                SELECT c.id, c.titulo, c.tipo, c.area, c.modalidad, c.revista
+                FROM reg_contribuciones c
+                JOIN reg_inscripciones i ON c.folio = i.folio
+                WHERE i.correo = ?
+                ORDER BY c.id ASC
+            ");
+            $stmt->execute([$email]);
+            echo json_encode(['success' => true, 'contributions' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'add_contribution':
+        $data = json_decode(file_get_contents('php://input'), true);
+        $email = $data['email'] ?? '';
+        if (empty($email)) { echo json_encode(['success' => false, 'error' => 'Email requerido']); break; }
+        try {
+            $stmtFolio = $pdo->prepare("SELECT folio FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
+            $stmtFolio->execute([$email]);
+            $folio = $stmtFolio->fetchColumn();
+            if (!$folio) { echo json_encode(['success' => false, 'error' => 'Registro no encontrado']); break; }
+            $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM reg_contribuciones WHERE folio = ?");
+            $stmtCount->execute([$folio]);
+            if ((int)$stmtCount->fetchColumn() >= 2) {
+                echo json_encode(['success' => false, 'error' => 'Máximo 2 contribuciones permitidas']); break;
+            }
+            $titulo = trim($data['titulo'] ?? '');
+            if (empty($titulo)) { echo json_encode(['success' => false, 'error' => 'El título es obligatorio']); break; }
+            $stmt = $pdo->prepare("INSERT INTO reg_contribuciones (folio, titulo, tipo, area, modalidad, revista) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$folio, $titulo, $data['tipo'] ?? 'ponencia', $data['area'] ?? '', $data['modalidad'] ?? 'presencial', $data['revista'] ?? 'none']);
+            echo json_encode(['success' => true, 'id' => $pdo->lastInsertId()]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'update_contribution':
+        $data = json_decode(file_get_contents('php://input'), true);
+        $email = $data['email'] ?? '';
+        $id = (int)($data['id'] ?? 0);
+        if (empty($email) || !$id) { echo json_encode(['success' => false, 'error' => 'Datos requeridos']); break; }
+        try {
+            $stmtCheck = $pdo->prepare("SELECT c.id FROM reg_contribuciones c JOIN reg_inscripciones i ON c.folio = i.folio WHERE c.id = ? AND i.correo = ?");
+            $stmtCheck->execute([$id, $email]);
+            if (!$stmtCheck->fetchColumn()) { echo json_encode(['success' => false, 'error' => 'No autorizado']); break; }
+            $titulo = trim($data['titulo'] ?? '');
+            if (empty($titulo)) { echo json_encode(['success' => false, 'error' => 'El título es obligatorio']); break; }
+            $stmt = $pdo->prepare("UPDATE reg_contribuciones SET titulo=?, tipo=?, area=?, modalidad=? WHERE id=?");
+            $stmt->execute([$titulo, $data['tipo'] ?? 'ponencia', $data['area'] ?? '', $data['modalidad'] ?? 'presencial', $id]);
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'delete_contribution':
+        $data = json_decode(file_get_contents('php://input'), true);
+        $email = $data['email'] ?? '';
+        $id = (int)($data['id'] ?? 0);
+        if (empty($email) || !$id) { echo json_encode(['success' => false, 'error' => 'Datos requeridos']); break; }
+        try {
+            $stmtCheck = $pdo->prepare("SELECT c.id FROM reg_contribuciones c JOIN reg_inscripciones i ON c.folio = i.folio WHERE c.id = ? AND i.correo = ?");
+            $stmtCheck->execute([$id, $email]);
+            if (!$stmtCheck->fetchColumn()) { echo json_encode(['success' => false, 'error' => 'No autorizado']); break; }
+            $pdo->prepare("DELETE FROM reg_contribuciones WHERE id = ?")->execute([$id]);
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'update_personal':
+        $data = json_decode(file_get_contents('php://input'), true);
+        $email = $data['email'] ?? '';
+        if (empty($email)) { echo json_encode(['success' => false, 'error' => 'Email requerido']); break; }
+        try {
+            $stmtFolio = $pdo->prepare("SELECT folio FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
+            $stmtFolio->execute([$email]);
+            $folio = $stmtFolio->fetchColumn();
+            if (!$folio) { echo json_encode(['success' => false, 'error' => 'Registro no encontrado']); break; }
+            $stmt = $pdo->prepare("UPDATE reg_personal SET nombre=?, apellido=?, institucion=?, ciudad=?, estado=?, pais=? WHERE folio=?");
+            $stmt->execute([
+                trim($data['nombre'] ?? ''),
+                trim($data['apellido'] ?? ''),
+                trim($data['institucion'] ?? ''),
+                trim($data['ciudad'] ?? ''),
+                trim($data['estado'] ?? ''),
+                trim($data['pais'] ?? ''),
+                $folio
+            ]);
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
     case 'update_settings':
         requireAdmin($pdo);
         $data = json_decode(file_get_contents('php://input'), true);
@@ -686,7 +799,18 @@ switch ($action) {
             $stmtCorreo = $pdo->prepare("SELECT correo FROM reg_inscripciones WHERE folio = ?");
             $stmtCorreo->execute([$folio]);
             $correo = $stmtCorreo->fetchColumn();
+            // Si el folio fue reemplazado por una actualización de registro, buscarlo en documentos
+            if (!$correo) {
+                $stmtFallback = $pdo->prepare("SELECT DISTINCT correo FROM reg_documentos WHERE folio = ? LIMIT 1");
+                $stmtFallback->execute([$folio]);
+                $correo = $stmtFallback->fetchColumn();
+            }
             if (!$correo) { echo json_encode(['success' => false, 'error' => 'Folio no encontrado']); break; }
+
+            // Usar el folio actual del usuario para la nueva subida
+            $stmtCurrentFolio = $pdo->prepare("SELECT folio FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
+            $stmtCurrentFolio->execute([$correo]);
+            $currentFolio = $stmtCurrentFolio->fetchColumn() ?: $folio;
 
             // Solo se permite volver a subir si el documento más reciente de este tipo
             // fue rechazado (o si aún no se ha subido ninguno de este tipo).
@@ -704,9 +828,9 @@ switch ($action) {
                 echo json_encode(['success' => false, 'error' => 'No se pudo guardar el archivo']); break;
             }
 
-            // Cada subida es un registro NUEVO en el historial, nunca se sobreescribe.
+            // Cada subida es un registro NUEVO en el historial, asociado al folio actual.
             $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado) VALUES (?,?,?,?,NOW(),'pendiente')")
-                ->execute([$correo, $folio, $tipo_doc, $filename]);
+                ->execute([$correo, $currentFolio, $tipo_doc, $filename]);
             $newStatus = recalcEstatusDocumentos($pdo, $correo);
             echo json_encode(['success' => true, 'filename' => $filename, 'newStatus' => $newStatus]);
         } catch (Exception $e) {

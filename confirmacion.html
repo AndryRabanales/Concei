@@ -62,7 +62,7 @@
 <body>
 
     <!-- Congress Banner -->
-    <img src="images/banner.jpg" alt="3o Congreso de Ciencias Exactas e Ingenierías" class="congress-banner">
+    <img src="images/newconcei.jpeg" alt="3o Congreso de Ciencias Exactas e Ingenierías" class="congress-banner">
 
     <div class="background-shapes">
         <div class="shape shape-1"></div>
@@ -101,6 +101,14 @@
                         </tr>
                     </tfoot>
                 </table>
+            </div>
+
+            <!-- Contribuciones registradas -->
+            <div id="contribSection" style="margin-top: 20px; text-align: left; display: none;">
+                <p style="font-weight: 700; color: #1e3a8a; font-size: 0.95rem; margin-bottom: 10px;">
+                    <i class="fa-solid fa-pen-nib"></i> Contribuciones Registradas
+                </p>
+                <ul id="contribList" style="list-style: none; padding: 0; margin: 0;"></ul>
             </div>
 
             <div style="margin-top: 22px; padding: 14px 18px; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 12px; text-align: left;">
@@ -159,6 +167,20 @@
             if (rows) {
                 tbody.innerHTML = rows;
                 table.style.display = 'block';
+            }
+
+            // Contribuciones
+            if (data.contributions && data.contributions.length > 0) {
+                const contribSection = document.getElementById('contribSection');
+                const contribList = document.getElementById('contribList');
+                data.contributions.forEach(c => {
+                    const li = document.createElement('li');
+                    li.style.cssText = 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:8px;';
+                    li.innerHTML = `<span style="font-weight:600;color:#1e3a8a;">${c.titulo}</span><br>
+                        <small style="color:#64748b;">${c.tipo || ''}${c.area ? ' · ' + c.area : ''}${c.modalidad ? ' · ' + c.modalidad : ''}</small>`;
+                    contribList.appendChild(li);
+                });
+                contribSection.style.display = 'block';
             }
         });
     </script>

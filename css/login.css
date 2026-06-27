@@ -2,14 +2,14 @@
 .login-body {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    min-height: 100vh;
     width: 100vw;
     margin: 0;
     padding: 0;
     background: linear-gradient(135deg, #f0f4f8 0%, #d9e2ec 100%);
     position: relative;
-    overflow: hidden;
-    /* No scroll allowed */
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 .login-container {
@@ -224,6 +224,52 @@
 
 .login-footer a:hover {
     text-decoration: underline;
+}
+
+/* Short-screen adjustments */
+@media (max-height: 700px) {
+    .congress-banner {
+        max-height: 12vh;
+    }
+
+    .login-header {
+        margin-bottom: 8px;
+    }
+
+    .login-header h2 {
+        font-size: 1.5rem;
+    }
+
+    .login-card {
+        padding: 20px;
+    }
+
+    .login-form .form-group {
+        margin-bottom: 12px;
+    }
+}
+
+@media (max-height: 500px) {
+    .congress-banner {
+        max-height: 8vh;
+    }
+
+    .login-header h2 {
+        font-size: 1.2rem;
+    }
+
+    .login-header p {
+        display: none;
+    }
+
+    .login-card {
+        padding: 15px;
+    }
+
+    .login-container {
+        padding: 10px;
+        justify-content: flex-start;
+    }
 }
 
 /* Animations reused from styles.css */

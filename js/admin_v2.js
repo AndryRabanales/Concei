@@ -1705,7 +1705,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ].map(esc).join(',');
                 });
 
-                const csv = '﻿' + [headers.join(','), ...rows].join('\r\n');
+                const csv = '﻿' + [headers.map(esc).join(','), ...rows].join('\r\n');
 
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);

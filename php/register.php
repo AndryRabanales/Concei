@@ -43,6 +43,14 @@ try {
         else                                $prevVisitIds[]    = $old['item_id'];
     }
 
+    // Preservar contribuciones antes del DELETE CASCADE
+    $prevContributions = [];
+    if ($esActualizacion) {
+        $stmtOldContrib = $pdo->prepare("SELECT tipo, area, modalidad, titulo, revista FROM reg_contribuciones c JOIN reg_inscripciones i ON c.folio = i.folio WHERE i.correo = ?");
+        $stmtOldContrib->execute([$correo]);
+        $prevContributions = $stmtOldContrib->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     $stmtDelete = $pdo->prepare("DELETE FROM reg_inscripciones WHERE correo = ?");
     $stmtDelete->execute([$correo]);
     
@@ -66,6 +74,29 @@ try {
     $total = $_POST['total_hidden'] ?? '$0.00';
     $concepto = $_POST['concept_hidden'] ?? 'N/A';
 
+    // Seguridad: en actualizaciones recalcular el total sumando los ítems nuevos
+    // desde la BD para evitar que el frontend aplique el descuento de taller gratis
+    // en compras adicionales (el descuento solo aplica en la primera compra).
+    if ($esActualizacion) {
+        $newWorkshops = array_diff(isset($_POST['workshop']) ? array_unique((array)$_POST['workshop']) : [], $prevWorkshopIds);
+        $newVisits    = array_diff(isset($_POST['visit'])    ? array_unique((array)$_POST['visit'])    : [], $prevVisitIds);
+
+        $extraTotal = 0.0;
+        foreach ($newWorkshops as $wid) {
+            $r = $pdo->prepare("SELECT precio FROM cat_talleres WHERE id = ?");
+            $r->execute([$wid]);
+            $extraTotal += (float)($r->fetchColumn() ?: 0);
+        }
+        foreach ($newVisits as $vid) {
+            $r = $pdo->prepare("SELECT precio FROM cat_visitas WHERE id = ?");
+            $r->execute([$vid]);
+            $extraTotal += (float)($r->fetchColumn() ?: 0);
+        }
+
+        // Reconstruir total: base ya pagada ($0 en actualización) + nuevos ítems
+        $total = '$' . number_format($extraTotal, 2);
+    }
+
     $stmt3 = $pdo->prepare("INSERT INTO reg_evento (folio, tipo, total, concepto) VALUES (?, ?, ?, ?)");
     $stmt3->execute([$folio, $tipo, $total, $concepto]);
 
@@ -75,7 +106,7 @@ try {
 
     // 3.1 DETALLES DE EVENTO (Talleres y Visitas)
     if (isset($_POST['workshop'])) {
-        $workshops = (array)$_POST['workshop'];
+        $workshops = array_unique((array)$_POST['workshop']);
         foreach ($workshops as $w_id) {
             // VERIFICAR CUPO EN TIEMPO REAL (Seguridad extra)
             $stmtCheck = $pdo->prepare("SELECT nombre, cupo, cupo_actual FROM cat_talleres WHERE id = ? FOR UPDATE");
@@ -100,7 +131,7 @@ try {
         }
     }
     if (isset($_POST['visit'])) {
-        $visits = (array)$_POST['visit'];
+        $visits = array_unique((array)$_POST['visit']);
         foreach ($visits as $v_id) {
             // VERIFICAR CUPO EN TIEMPO REAL
             $stmtCheck = $pdo->prepare("SELECT nombre, cupo, cupo_actual FROM cat_visitas WHERE id = ? FOR UPDATE");
@@ -123,6 +154,7 @@ try {
 
     // 3.2 CONTRIBUCIONES DE AUTOR
     $revista = $_POST['journalPref'] ?? 'none';
+    $newContribInserted = false;
     for ($i = 1; $i <= 2; $i++) {
         if (!empty($_POST["contribTitle_$i"])) {
             $cTipo = $_POST["contribType_$i"] ?? '';
@@ -132,6 +164,14 @@ try {
 
             $stmtC = $pdo->prepare("INSERT INTO reg_contribuciones (folio, tipo, area, modalidad, titulo, revista) VALUES (?, ?, ?, ?, ?, ?)");
             $stmtC->execute([$folio, $cTipo, $cArea, $cMod, $cTitulo, $revista]);
+            $newContribInserted = true;
+        }
+    }
+    // Si es actualización y no se enviaron contribuciones nuevas, restaurar las anteriores
+    if ($esActualizacion && !$newContribInserted && !empty($prevContributions)) {
+        $stmtC = $pdo->prepare("INSERT INTO reg_contribuciones (folio, tipo, area, modalidad, titulo, revista) VALUES (?, ?, ?, ?, ?, ?)");
+        foreach ($prevContributions as $pc) {
+            $stmtC->execute([$folio, $pc['tipo'], $pc['area'], $pc['modalidad'], $pc['titulo'], $pc['revista']]);
         }
     }
 
@@ -242,6 +282,24 @@ try {
             }
         }
 
+        // Contribuciones del autor
+        $contribBlock = '';
+        $stmtContribMail = $pdo->prepare("SELECT titulo, tipo, area, modalidad FROM reg_contribuciones WHERE folio = ?");
+        $stmtContribMail->execute([$folio]);
+        $contribsForMail = $stmtContribMail->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($contribsForMail)) {
+            $contribItems = '';
+            foreach ($contribsForMail as $c) {
+                $contribItems .= "<li style='margin-bottom:8px;'><strong>" . htmlspecialchars($c['titulo']) . "</strong><br>
+                    <small style='color:#64748b;'>" . htmlspecialchars($c['tipo']) . " · " . htmlspecialchars($c['area']) . " · " . htmlspecialchars($c['modalidad']) . "</small></li>";
+            }
+            $contribBlock = "
+                <div style='margin: 20px 0;'>
+                    <p style='margin: 0 0 10px; font-weight: bold; color: #1e3a8a; font-size: 14px;'>Contribuciones Registradas</p>
+                    <ul style='margin:0; padding-left:18px; font-size:14px; color:#334155;'>$contribItems</ul>
+                </div>";
+        }
+
         // Bug 1 — Obtener precio base del tipo de registro desde cat_ajustes
         $stmtBasePrice = $pdo->prepare("SELECT valor FROM cat_ajustes WHERE clave = ?");
         $stmtBasePrice->execute([$tipo]);
@@ -306,6 +364,8 @@ try {
                         </tfoot>
                     </table>
                 </div>
+
+                $contribBlock
 
                 <!-- Folio y concepto -->
                 <div style='background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 14px;'>

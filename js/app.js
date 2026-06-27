@@ -100,7 +100,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (typeof window.updateSummary === 'function') window.updateSummary();
             }
 
-            const sectionsToHide = ['personalInfoSection', 'regTypeSection', 'authorSection', 'policySection'];
+            // Ocultar tipo de registro y políticas (no editables en actualización)
+            const sectionsToHide = ['regTypeSection', 'policySection'];
             sectionsToHide.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
@@ -108,6 +109,56 @@ document.addEventListener('DOMContentLoaded', () => {
                     el.querySelectorAll('input, select, textarea').forEach(inp => inp.removeAttribute('required'));
                 }
             });
+
+            // Datos personales: mostrar con aviso y botón dedicado de actualización
+            const personalSection = document.getElementById('personalInfoSection');
+            if (personalSection) {
+                const updateNotice = document.createElement('div');
+                updateNotice.style.cssText = 'background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;margin-bottom:18px;';
+                updateNotice.innerHTML = `<p style="margin:0 0 10px;color:#1e40af;font-size:0.9rem;font-weight:600;">
+                    <i class="fa-solid fa-pen-to-square"></i> Actualiza tus datos personales si es necesario (el correo no puede modificarse).
+                </p>
+                <button type="button" id="savePersonalBtn" style="background:#1e3a8a;color:white;border:none;padding:9px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;">
+                    Guardar datos personales
+                </button>
+                <span id="savePersonalStatus" style="margin-left:12px;font-size:0.85rem;color:#64748b;"></span>`;
+                personalSection.insertBefore(updateNotice, personalSection.firstChild);
+
+                document.getElementById('savePersonalBtn').addEventListener('click', async () => {
+                    const btn = document.getElementById('savePersonalBtn');
+                    const status = document.getElementById('savePersonalStatus');
+                    btn.disabled = true;
+                    status.textContent = 'Guardando...';
+                    try {
+                        const res = await fetch('php/api.php?action=update_personal', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: userEmail,
+                                nombre: document.getElementById('firstName')?.value || '',
+                                apellido: document.getElementById('lastName')?.value || '',
+                                institucion: document.getElementById('organization')?.value || '',
+                                ciudad: document.getElementById('city')?.value || '',
+                                estado: document.getElementById('state')?.value || '',
+                                pais: document.getElementById('country')?.value || ''
+                            })
+                        });
+                        const result = await res.json();
+                        status.textContent = result.success ? '✅ Datos actualizados.' : '❌ ' + (result.error || 'Error');
+                    } catch (e) {
+                        status.textContent = '❌ Error de conexión.';
+                    } finally {
+                        btn.disabled = false;
+                    }
+                });
+            }
+
+            // authorSection oculta para usuarios que regresan (se gestiona desde el panel "Mis Contribuciones")
+            const authorSection = document.getElementById('authorSection');
+            if (authorSection) {
+                authorSection.style.display = 'none';
+                authorSection.querySelectorAll('input, select, textarea').forEach(inp => inp.removeAttribute('required'));
+            }
 
             const form = document.getElementById('registrationForm');
 
@@ -385,6 +436,260 @@ document.addEventListener('DOMContentLoaded', () => {
 
             loadAndRenderDocPanel();
             // ── Fin panel documentos ────────────────────────────────────────────
+
+            // ── Panel de gestión de contribuciones ──────────────────────────────
+            const AREA_LABELS_MAP = {
+                energias: 'Energías renovables', ambiental: 'Ingeniería ambiental',
+                ia: 'Inteligencia artificial', salud: 'Alimentación y salud',
+                estructuras: 'Ing. de estructuras y construcción', imagenes: 'Procesamiento de imágenes',
+                robotica: 'Robótica y visión computacional', moleculas: 'Moléculas y materiales funcionales',
+                fisica: 'Ingeniería física', cuantico: 'Cómputo científico/cuántico',
+                ciencias_info: 'Ciencia y tecnología de la información', biotecnologia: 'Biotecnología y Bioprocesos',
+                procesos: 'Ing. de procesos e innovación industrial', matematicas: 'Matemáticas básicas y aplicadas',
+                software: 'Ingeniería de software', tecnologias_emer: 'Tecnologías emergentes en computación',
+                educacion: 'Educación, sociedad y formación humanista'
+            };
+            const AREA_OPTIONS_HTML = Object.entries(AREA_LABELS_MAP).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+
+            async function loadAndRenderContribPanel() {
+                try {
+                    const res = await fetch(`php/api.php?action=get_my_contributions&email=${encodeURIComponent(userEmail)}&t=${Date.now()}`);
+                    const result = await res.json();
+                    renderContribPanel(result.contributions || []);
+                } catch (e) {
+                    console.error('Error cargando contribuciones:', e);
+                }
+            }
+
+            function renderContribPanel(contributions) {
+                const existing = document.getElementById('contribMgmtPanel');
+                if (existing) existing.remove();
+
+                const panel = document.createElement('div');
+                panel.id = 'contribMgmtPanel';
+                panel.style.cssText = 'background:white;border-radius:14px;border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:20px;overflow:hidden;';
+
+                const esc = s => String(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+                let itemsHtml = '';
+                contributions.forEach(c => {
+                    const areaLabel = AREA_LABELS_MAP[c.area] || c.area;
+                    const areaOpts = Object.entries(AREA_LABELS_MAP).map(([v,l]) =>
+                        `<option value="${v}" ${c.area===v?'selected':''}>${l}</option>`).join('');
+                    itemsHtml += `
+                    <div class="contrib-item" data-id="${c.id}" style="border-bottom:1px solid #f1f5f9;padding:14px 18px;">
+                        <div class="contrib-view" style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+                            <div style="flex:1;min-width:0;">
+                                <p style="margin:0 0 4px;font-weight:700;color:#1e3a8a;font-size:0.92rem;word-break:break-word;">${esc(c.titulo)}</p>
+                                <p style="margin:0;font-size:0.78rem;color:#64748b;">${c.tipo==='ponencia'?'Ponencia':'Póster'} · ${areaLabel} · ${c.modalidad}</p>
+                            </div>
+                            <div style="display:flex;gap:6px;flex-shrink:0;">
+                                <button type="button" class="contrib-edit-btn" data-id="${c.id}"
+                                    style="padding:5px 12px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:7px;font-weight:600;cursor:pointer;font-size:0.8rem;">
+                                    <i class="fa-solid fa-pen"></i> Editar
+                                </button>
+                                <button type="button" class="contrib-del-btn" data-id="${c.id}"
+                                    style="padding:5px 10px;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;border-radius:7px;font-weight:600;cursor:pointer;font-size:0.8rem;">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="contrib-edit-form" data-id="${c.id}" style="display:none;margin-top:12px;background:#f8fafc;border-radius:10px;padding:14px;border:1px solid #e2e8f0;">
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Tipo</label>
+                                    <select class="edit-tipo" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">
+                                        <option value="ponencia" ${c.tipo==='ponencia'?'selected':''}>Ponencia</option>
+                                        <option value="poster" ${c.tipo==='poster'?'selected':''}>Póster</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Área</label>
+                                    <select class="edit-area" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">${areaOpts}</select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Modalidad</label>
+                                    <select class="edit-modalidad" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">
+                                        <option value="presencial" ${c.modalidad==='presencial'?'selected':''}>Presencial</option>
+                                        <option value="virtual" ${c.modalidad==='virtual'?'selected':''}>Virtual</option>
+                                        <option value="cualquiera" ${c.modalidad==='cualquiera'?'selected':''}>Cualquiera</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="margin-bottom:10px;">
+                                <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Título</label>
+                                <input type="text" class="edit-titulo" value="${esc(c.titulo)}"
+                                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.88rem;box-sizing:border-box;">
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button type="button" class="contrib-save-btn" data-id="${c.id}"
+                                    style="padding:7px 16px;background:#1e3a8a;color:white;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.82rem;">Guardar cambios</button>
+                                <button type="button" class="contrib-cancel-btn" data-id="${c.id}"
+                                    style="padding:7px 14px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:7px;font-weight:600;cursor:pointer;font-size:0.82rem;">Cancelar</button>
+                                <span class="contrib-save-status" style="font-size:0.78rem;color:#64748b;"></span>
+                            </div>
+                        </div>
+                    </div>`;
+                });
+
+                const canAdd = contributions.length < 2;
+                const emptyMsg = contributions.length === 0
+                    ? '<p style="color:#64748b;font-style:italic;font-size:0.85rem;margin:0 0 12px 0;">No tienes contribuciones registradas aún.</p>' : '';
+
+                panel.innerHTML = `
+                    <div style="padding:12px 18px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;">
+                        <i class="fa-solid fa-pen-nib" style="color:#1e3a8a;"></i>
+                        <span style="font-weight:700;color:#1e3a8a;font-size:0.93rem;">Mis Contribuciones</span>
+                        <span style="font-size:0.78rem;color:#64748b;margin-left:auto;">${contributions.length}/2 registradas</span>
+                    </div>
+                    <div id="contribItemsList">${itemsHtml}</div>
+                    <div id="contribAddSection" style="padding:14px 18px;">
+                        ${emptyMsg}
+                        ${canAdd ? `
+                        <button type="button" id="showAddContribFormBtn"
+                            style="display:flex;align-items:center;gap:6px;padding:8px 16px;background:#f0fdf4;color:#15803d;border:1px dashed #86efac;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.85rem;">
+                            <i class="fa-solid fa-plus"></i> Agregar contribución
+                        </button>
+                        <div id="addContribForm" style="display:none;margin-top:12px;background:#f8fafc;border-radius:10px;padding:14px;border:1px solid #e2e8f0;">
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Tipo</label>
+                                    <select id="new-tipo" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">
+                                        <option value="ponencia">Ponencia</option>
+                                        <option value="poster">Póster</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Área</label>
+                                    <select id="new-area" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">${AREA_OPTIONS_HTML}</select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Modalidad</label>
+                                    <select id="new-modalidad" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;">
+                                        <option value="presencial">Presencial</option>
+                                        <option value="virtual">Virtual</option>
+                                        <option value="cualquiera">Cualquiera</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="margin-bottom:10px;">
+                                <label style="font-size:0.78rem;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Título</label>
+                                <input type="text" id="new-titulo" placeholder="Título de tu trabajo"
+                                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.88rem;box-sizing:border-box;">
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button type="button" id="saveNewContrib"
+                                    style="padding:7px 16px;background:#15803d;color:white;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.82rem;">Guardar</button>
+                                <button type="button" id="cancelNewContrib"
+                                    style="padding:7px 14px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:7px;font-weight:600;cursor:pointer;font-size:0.82rem;">Cancelar</button>
+                                <span id="newContribStatus" style="font-size:0.78rem;color:#64748b;"></span>
+                            </div>
+                        </div>` : '<p style="font-size:0.82rem;color:#92400e;background:#fef3c7;padding:8px 12px;border-radius:8px;margin:0;">Límite de 2 contribuciones alcanzado.</p>'}
+                    </div>`;
+
+                if (form) form.insertBefore(panel, form.firstChild);
+
+                // Editar
+                panel.querySelectorAll('.contrib-edit-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const id = btn.dataset.id;
+                        const editForm = panel.querySelector(`.contrib-edit-form[data-id="${id}"]`);
+                        const isOpen = editForm.style.display !== 'none';
+                        editForm.style.display = isOpen ? 'none' : 'block';
+                        btn.innerHTML = isOpen ? '<i class="fa-solid fa-pen"></i> Editar' : 'Cerrar';
+                    });
+                });
+
+                // Cancelar edición
+                panel.querySelectorAll('.contrib-cancel-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const id = btn.dataset.id;
+                        const editForm = panel.querySelector(`.contrib-edit-form[data-id="${id}"]`);
+                        editForm.style.display = 'none';
+                        const editBtn = panel.querySelector(`.contrib-edit-btn[data-id="${id}"]`);
+                        if (editBtn) editBtn.innerHTML = '<i class="fa-solid fa-pen"></i> Editar';
+                    });
+                });
+
+                // Guardar edición
+                panel.querySelectorAll('.contrib-save-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.dataset.id;
+                        const editForm = panel.querySelector(`.contrib-edit-form[data-id="${id}"]`);
+                        const statusEl = editForm.querySelector('.contrib-save-status');
+                        const titulo = editForm.querySelector('.edit-titulo').value.trim();
+                        if (!titulo) { statusEl.textContent = '⚠️ El título es obligatorio.'; return; }
+                        btn.disabled = true; statusEl.textContent = 'Guardando...';
+                        try {
+                            const res = await fetch('php/api.php?action=update_contribution', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    email: userEmail, id: parseInt(id), titulo,
+                                    tipo: editForm.querySelector('.edit-tipo').value,
+                                    area: editForm.querySelector('.edit-area').value,
+                                    modalidad: editForm.querySelector('.edit-modalidad').value
+                                })
+                            });
+                            const result = await res.json();
+                            if (result.success) { loadAndRenderContribPanel(); }
+                            else { statusEl.textContent = '❌ ' + (result.error || 'Error'); btn.disabled = false; }
+                        } catch (e) { statusEl.textContent = '❌ Error de conexión.'; btn.disabled = false; }
+                    });
+                });
+
+                // Eliminar
+                panel.querySelectorAll('.contrib-del-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        if (!confirm('¿Eliminar esta contribución?')) return;
+                        btn.disabled = true;
+                        try {
+                            const res = await fetch('php/api.php?action=delete_contribution', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ email: userEmail, id: parseInt(btn.dataset.id) })
+                            });
+                            const result = await res.json();
+                            if (result.success) loadAndRenderContribPanel();
+                            else { alert('Error: ' + result.error); btn.disabled = false; }
+                        } catch (e) { alert('Error de conexión.'); btn.disabled = false; }
+                    });
+                });
+
+                // Mostrar/ocultar form agregar
+                const showAddBtn = panel.querySelector('#showAddContribFormBtn');
+                const addFormDiv = panel.querySelector('#addContribForm');
+                if (showAddBtn && addFormDiv) {
+                    showAddBtn.addEventListener('click', () => {
+                        addFormDiv.style.display = addFormDiv.style.display === 'none' ? 'block' : 'none';
+                    });
+                    panel.querySelector('#cancelNewContrib')?.addEventListener('click', () => {
+                        addFormDiv.style.display = 'none';
+                    });
+                    panel.querySelector('#saveNewContrib')?.addEventListener('click', async () => {
+                        const titulo = panel.querySelector('#new-titulo').value.trim();
+                        const statusEl = panel.querySelector('#newContribStatus');
+                        if (!titulo) { statusEl.textContent = '⚠️ El título es obligatorio.'; return; }
+                        const saveBtn = panel.querySelector('#saveNewContrib');
+                        saveBtn.disabled = true; statusEl.textContent = 'Guardando...';
+                        try {
+                            const res = await fetch('php/api.php?action=add_contribution', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    email: userEmail, titulo,
+                                    tipo: panel.querySelector('#new-tipo').value,
+                                    area: panel.querySelector('#new-area').value,
+                                    modalidad: panel.querySelector('#new-modalidad').value
+                                })
+                            });
+                            const result = await res.json();
+                            if (result.success) loadAndRenderContribPanel();
+                            else { statusEl.textContent = '❌ ' + (result.error || 'Error'); saveBtn.disabled = false; }
+                        } catch (e) { statusEl.textContent = '❌ Error de conexión.'; saveBtn.disabled = false; }
+                    });
+                }
+            }
+
+            loadAndRenderContribPanel();
+            // ── Fin panel contribuciones ────────────────────────────────────────
         }
 
         // Helper to create HTML
@@ -1260,11 +1565,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         regTypeLabel = selectedRegTypeEl ? (regTypeLabels[selectedRegTypeEl.value] || selectedRegTypeEl.value) : '';
                         regTypePrice = selectedRegTypeEl ? parseFloat(selectedRegTypeEl.dataset.price || 0) : 0;
 
-                        // Algunos tipos de registro incluyen un taller/visita sin costo
-                        // extra (misma regla aplicada en updateSummary). Si hay varios
-                        // seleccionados con precios diferentes, el más barato es el
-                        // gratuito y el(los) más caro(s) se cobran.
-                        const qualifiesForFreeAddon = !!selectedRegTypeEl && (
+                        // El taller gratis aplica solo en la PRIMERA compra.
+                        // Usuarios que regresan a agregar talleres pagan precio completo.
+                        const qualifiesForFreeAddon = !window.isReturningUser && !!selectedRegTypeEl && (
                             selectedRegTypeEl.value === 'general' ||
                             selectedRegTypeEl.value === 'student_external' ||
                             (selectedRegTypeEl.value === 'code_access' && window.isCodeVerified)
@@ -1311,6 +1614,21 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.error("[DEBUG] Error recolectando detalles de confirmación (no crítico):", collectErr);
                     }
 
+                    // Recopilar contribuciones del formulario para mostrar en confirmacion.html
+                    const contribRowsEls = document.querySelectorAll('.contribution-row');
+                    const contributions = [];
+                    contribRowsEls.forEach(row => {
+                        const titulo = row.querySelector('input[name^="contribTitle_"]')?.value?.trim();
+                        if (titulo) {
+                            contributions.push({
+                                titulo,
+                                tipo: row.querySelector('select[name^="contribType_"]')?.value || '',
+                                area: row.querySelector('select[name^="contribArea_"]')?.value || '',
+                                modalidad: row.querySelector('select[name^="contribModality_"]')?.value || ''
+                            });
+                        }
+                    });
+
                     // El registro YA quedó guardado en la BD (data.success === true).
                     // Esto debe ejecutarse SIEMPRE para que el comprobante aparezca.
                     localStorage.setItem('lastRegistration', JSON.stringify({
@@ -1322,6 +1640,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         regTypeLabel,
                         regTypePrice,
                         purchaseItems,
+                        contributions,
                         isReturning: !!window.isReturningUser
                     }));
 
@@ -1615,16 +1934,16 @@ window.updateSummary = async function () {
 
         if (val === "general") {
             label = "General";
-            qualifiesForFreeAddon = true;
+            qualifiesForFreeAddon = !window.isReturningUser;
         } else if (val === "student_external") {
             label = "Estudiante General";
-            qualifiesForFreeAddon = true;
+            qualifiesForFreeAddon = !window.isReturningUser;
         } else if (val === "student_uady") {
             label = "Estudiante/Profesor UADY";
         } else if (val === "code_access") {
             const isValid = window.isCodeVerified;
             label = isValid ? "Registro por Código (Beca/VIP)" : "Código Sin Verificar";
-            qualifiesForFreeAddon = isValid;
+            qualifiesForFreeAddon = isValid && !window.isReturningUser;
         }
 
         addItem(label, basePrice);
@@ -1754,40 +2073,6 @@ window.updatePaymentConcept = function () {
     console.log("NEW REGISTRATION CONCEPT:", concept);
     conceptDisplay.textContent = concept;
 };
-
-// Autofill for testing
-document.getElementById('autofillTestBtn')?.addEventListener('click', () => {
-    const names = ["PEDRO", "MARIA", "LUIS", "ANA", "CARLOS", "ELENA", "SOFIA", "DIEGO"];
-    const surnames = ["GARCIA", "LOPEZ", "MARTINEZ", "RODRIGUEZ", "SANCHEZ", "PEREZ", "DIAZ", "RUIZ"];
-    const types = ["general", "student_external", "student_uady"];
-
-    const randomName = names[Math.floor(Math.random() * names.length)];
-    const randomSurname = surnames[Math.floor(Math.random() * surnames.length)];
-    const randomType = types[Math.floor(Math.random() * types.length)];
-
-    document.getElementById('firstName').value = randomName;
-    document.getElementById('lastName').value = randomSurname;
-    document.getElementById('organization').value = "INSTITUTO " + randomSurname;
-    document.getElementById('city').value = "MERIDA";
-    document.getElementById('country').value = "MEXICO";
-
-    const regOption = document.querySelector(`input[name="regType"][value="${randomType}"]`);
-    if (regOption) regOption.checked = true;
-
-    // Randomly select 1 or 2 workshops
-    const allWS = document.querySelectorAll('input[name="workshop"]');
-    allWS.forEach(cb => cb.checked = false);
-    if (allWS.length > 0) {
-        allWS[0].checked = true;
-        if (allWS.length > 1 && Math.random() > 0.5) allWS[1].checked = true;
-    }
-
-    // Trigger updates
-    if (typeof window.updateSummary === 'function') window.updateSummary();
-    if (typeof window.updatePaymentConcept === 'function') window.updatePaymentConcept();
-
-    console.log(`AUTOFILL COMPLETE: ${randomName} ${randomSurname} (${randomType})`);
-});
 
 // Listeners for Concept Generation
 document.getElementById('firstName')?.addEventListener('input', window.updatePaymentConcept);

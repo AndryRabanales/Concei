@@ -1,197 +1,211 @@
--- Script de Base de Datos DrAnabel v8 (Tablas con Prefijo, Columnas SIN Prefijo - 100% ESPAÑOL)
--- Este script organiza las tablas por módulo pero usa nombres de columna limpios.
+-- Script de Base de Datos ConCEI 2026
+-- Compatible con MySQL 9.x y MariaDB 10.x
+-- Generado con formato phpMyAdmin para máxima compatibilidad
 
-CREATE DATABASE IF NOT EXISTS concei_db;
-USE concei_db;
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+SET NAMES utf8mb4;
 
 -- ==========================================
--- 0. DESTRUCCIÓN DE TODO LO EXISTENTE
+-- 0. LIMPIEZA
 -- ==========================================
+CREATE DATABASE IF NOT EXISTS `concei_db` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE `concei_db`;
+
 SET FOREIGN_KEY_CHECKS = 0;
-DROP TABLE IF EXISTS reg_archivos, reg_facturacion, reg_evento, reg_personal, reg_inscripciones, ini_usuarios, cat_talleres, cat_visitas, cat_codigos, cat_ajustes;
+DROP TABLE IF EXISTS `login_attempts`, `admin_sessions`, `admin_users`,
+    `reg_reservas_temp`, `reg_conceptos_historial`, `reg_documentos`,
+    `reg_contribuciones`, `reg_evento_detalles`, `reg_archivos`,
+    `reg_facturacion`, `reg_evento`, `reg_personal`, `reg_inscripciones`,
+    `ini_usuarios`, `cat_ajustes`, `cat_codigos`, `cat_visitas`, `cat_talleres`;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==========================================
 -- 1. MÓDULO INICIO / CUENTAS (ini_)
 -- ==========================================
-CREATE TABLE ini_usuarios (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    correo VARCHAR(255) UNIQUE NOT NULL,
-    contrasena VARCHAR(255) NOT NULL,
-    telefono VARCHAR(20),
-    fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+
+CREATE TABLE IF NOT EXISTS `ini_usuarios` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `contrasena` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `telefono` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `fecha_registro` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `correo` (`correo`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
 -- 2. MÓDULO REGISTRO AL CONGRESO (reg_)
 -- ==========================================
 
--- Tabla Principal
-CREATE TABLE reg_inscripciones (
-    folio VARCHAR(50) PRIMARY KEY,
-    correo VARCHAR(255) NOT NULL,
-    estatus VARCHAR(50) DEFAULT 'pendiente',
-    fecha_inscripcion DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+CREATE TABLE IF NOT EXISTS `reg_inscripciones` (
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `estatus` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'pendiente',
+  `fecha_inscripcion` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Rama Personal
-CREATE TABLE reg_personal (
-    folio VARCHAR(50) PRIMARY KEY,
-    nombre VARCHAR(100) NOT NULL,
-    apellido VARCHAR(100) NOT NULL,
-    institucion VARCHAR(255),
-    ciudad VARCHAR(100),
-    estado VARCHAR(100),
-    pais VARCHAR(100),
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `reg_personal` (
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `nombre` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `apellido` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `institucion` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ciudad` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `estado` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `pais` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Rama Detalles Evento
-CREATE TABLE reg_evento (
-    folio VARCHAR(50) PRIMARY KEY,
-    tipo VARCHAR(50) NOT NULL,
-    total VARCHAR(50),
-    concepto VARCHAR(100),
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `reg_evento` (
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tipo` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `total` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `concepto` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- NUEVA TABLA: Detalles de Talleres y Visitas (Muchos a Muchos)
-CREATE TABLE reg_evento_detalles (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    folio VARCHAR(50),
-    item_id VARCHAR(50),
-    tipo_item ENUM('taller', 'visita'),
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `reg_evento_detalles` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `item_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `tipo_item` enum('taller','visita') COLLATE utf8mb4_unicode_ci NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_detalle` (`folio`,`item_id`,`tipo_item`),
+  KEY `fk-reg_evento_detalles-folio` (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- NUEVA TABLA: Contribuciones de Autores
-CREATE TABLE reg_contribuciones (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    folio VARCHAR(50),
-    tipo VARCHAR(50),
-    area VARCHAR(100),
-    modalidad VARCHAR(50),
-    titulo TEXT,
-    revista VARCHAR(100), -- COLUMNA MOVIDA AQUÍ
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `reg_contribuciones` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `tipo` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `area` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `modalidad` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `titulo` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `revista` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk-reg_contribuciones-folio` (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Rama Facturación
-CREATE TABLE reg_facturacion (
-    folio VARCHAR(50) PRIMARY KEY,
-    razon VARCHAR(255),
-    rfc VARCHAR(20),
-    direccion TEXT,
-    cp VARCHAR(10),
-    ciudad VARCHAR(100),
-    estado VARCHAR(100),
-    correo VARCHAR(255),
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `reg_facturacion` (
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `razon` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `rfc` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `direccion` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `cp` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ciudad` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `estado` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Rama Archivos (LEGACY - reemplazada por reg_documentos, se conserva por compatibilidad)
-CREATE TABLE reg_archivos (
-    folio VARCHAR(50) PRIMARY KEY,
-    comprobante VARCHAR(255),
-    identificacion VARCHAR(255),
-    constancia VARCHAR(255),
-    comprobante_adicional VARCHAR(255),
-    constancia_adicional VARCHAR(255),
-    FOREIGN KEY (folio) REFERENCES reg_inscripciones(folio) ON DELETE CASCADE
-);
+-- LEGACY: reemplazada por reg_documentos, se conserva por compatibilidad
+CREATE TABLE IF NOT EXISTS `reg_archivos` (
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `comprobante` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `identificacion` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `constancia` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `comprobante_adicional` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `constancia_adicional` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Historial de documentos (append-only, indexado por correo para sobrevivir
--- a la "Lógica de Sobreescritura" de folios en register.php)
-CREATE TABLE reg_documentos (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    correo VARCHAR(255) NOT NULL,
-    folio VARCHAR(50) NOT NULL,
-    tipo_doc VARCHAR(50) NOT NULL,
-    archivo VARCHAR(255) NOT NULL,
-    fecha_subida DATETIME DEFAULT CURRENT_TIMESTAMP,
-    estado ENUM('pendiente','aceptado','rechazado') DEFAULT 'pendiente',
-    comentario VARCHAR(500) DEFAULT NULL,
-    revisado_por VARCHAR(255) DEFAULT NULL,
-    fecha_revision DATETIME DEFAULT NULL,
-    UNIQUE KEY uq_doc (correo, tipo_doc, archivo),
-    INDEX idx_correo (correo),
-    INDEX idx_folio (folio)
-);
+-- Historial de documentos (append-only, indexado por correo)
+CREATE TABLE IF NOT EXISTS `reg_documentos` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tipo_doc` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `archivo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `fecha_subida` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `estado` enum('pendiente','aceptado','rechazado') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pendiente',
+  `comentario` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `revisado_por` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `fecha_revision` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_doc` (`correo`,`tipo_doc`,`archivo`),
+  KEY `idx_correo` (`correo`),
+  KEY `idx_folio` (`folio`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Historial de conceptos de pago generados (append-only, indexado por correo
--- para sobrevivir a la "Lógica de Sobreescritura" de folios en register.php)
-CREATE TABLE reg_conceptos_historial (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    correo VARCHAR(255) NOT NULL,
-    folio VARCHAR(50) NOT NULL,
-    concepto VARCHAR(100) NOT NULL,
-    total VARCHAR(50),
-    fecha_generado DATETIME DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_correo (correo)
-);
+-- Historial de conceptos de pago (append-only)
+CREATE TABLE IF NOT EXISTS `reg_conceptos_historial` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `folio` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `concepto` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `total` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `fecha_generado` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_correo` (`correo`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Reservas temporales de cupos (talleres/visitas) mientras un usuario está
--- llenando el formulario, antes de confirmar el registro. config.php::syncCapacity
--- las cuenta junto con reg_evento_detalles para calcular cupo_actual, y las
--- limpia automáticamente cuando tienen más de 30 minutos.
-CREATE TABLE reg_reservas_temp (
-    correo VARCHAR(255) PRIMARY KEY,
-    items_json TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+-- Reservas temporales de cupos
+CREATE TABLE IF NOT EXISTS `reg_reservas_temp` (
+  `correo` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `items_json` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`correo`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
 -- 3. MÓDULO CATÁLOGOS / CONFIG (cat_)
 -- ==========================================
 
-CREATE TABLE cat_talleres (
-    id VARCHAR(50) PRIMARY KEY,
-    nombre VARCHAR(255) NOT NULL,
-    descripcion TEXT,
-    precio DECIMAL(10, 2) DEFAULT 70.00,
-    horario VARCHAR(100),
-    instructor VARCHAR(255),
-    dependencia VARCHAR(255),
-    modalidad VARCHAR(50) DEFAULT 'Presencial',
-    cupo INT DEFAULT 30,
-    cupo_actual INT NOT NULL DEFAULT 0,
-    activo TINYINT(1) NOT NULL DEFAULT 1
-);
+CREATE TABLE IF NOT EXISTS `cat_talleres` (
+  `id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `nombre` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `descripcion` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `precio` decimal(10,2) DEFAULT '70.00',
+  `horario` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `instructor` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `dependencia` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `modalidad` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'Presencial',
+  `cupo` int DEFAULT '30',
+  `cupo_actual` int NOT NULL DEFAULT '0',
+  `activo` tinyint(1) NOT NULL DEFAULT '1',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE cat_visitas (
-    id VARCHAR(50) PRIMARY KEY,
-    nombre VARCHAR(255) NOT NULL,
-    descripcion TEXT,
-    precio DECIMAL(10, 2) DEFAULT 70.00,
-    horario VARCHAR(100),
-    instructor VARCHAR(255),
-    dependencia VARCHAR(255),
-    modalidad VARCHAR(50) DEFAULT 'Presencial',
-    cupo INT DEFAULT 30,
-    cupo_actual INT NOT NULL DEFAULT 0,
-    activo TINYINT(1) NOT NULL DEFAULT 1
-);
+CREATE TABLE IF NOT EXISTS `cat_visitas` (
+  `id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `nombre` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `descripcion` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `precio` decimal(10,2) DEFAULT '70.00',
+  `horario` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `instructor` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `dependencia` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `modalidad` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'Presencial',
+  `cupo` int DEFAULT '30',
+  `cupo_actual` int NOT NULL DEFAULT '0',
+  `activo` tinyint(1) NOT NULL DEFAULT '1',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE cat_codigos (
-    id VARCHAR(50) PRIMARY KEY,
-    usado BOOLEAN DEFAULT FALSE,
-    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+CREATE TABLE IF NOT EXISTS `cat_codigos` (
+  `id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `usado` tinyint(1) DEFAULT '0',
+  `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE cat_ajustes (
-    clave VARCHAR(50) PRIMARY KEY,
-    valor DECIMAL(10, 2) NOT NULL
-);
+CREATE TABLE IF NOT EXISTS `cat_ajustes` (
+  `clave` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `valor` decimal(10,2) NOT NULL,
+  PRIMARY KEY (`clave`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
 -- 4. DATOS INICIALES
 -- ==========================================
-INSERT INTO cat_ajustes (clave, valor) VALUES 
+
+INSERT INTO `cat_ajustes` (`clave`, `valor`) VALUES
 ('general', 1000.00),
 ('student_external', 800.00),
 ('student_uady', 0.00);
 
-INSERT INTO cat_talleres (id, nombre, precio, horario, instructor, dependencia, modalidad, cupo) VALUES 
+INSERT INTO `cat_talleres` (`id`, `nombre`, `precio`, `horario`, `instructor`, `dependencia`, `modalidad`, `cupo`) VALUES
 ('ws1', 'IA EN INGENIERÍA', 70.00, '9:00 am - 1:00 pm', 'DRA JESSICA CANTO', 'UADY', 'Virtual', 25),
 ('ws2', 'VIDEOJUEGOS 2D', 70.00, '10:00 am - 1:00 pm', 'MANUEL ESCALANTE', 'UADY', 'Virtual', 40),
 ('ws3', 'MINERÍA DE DATOS', 70.00, '9:00 am - 1:00 pm', 'VÍCTOR MENÉNDEZ', 'UADY', 'Presencial', 20);
@@ -200,34 +214,89 @@ INSERT INTO cat_talleres (id, nombre, precio, horario, instructor, dependencia, 
 -- 5. MÓDULO ADMINISTRACIÓN (admin_)
 -- ==========================================
 
-CREATE TABLE admin_users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(100) NOT NULL UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
-    rol ENUM('superadmin', 'admin') DEFAULT 'admin',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+CREATE TABLE IF NOT EXISTS `admin_users` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `username` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `password_hash` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `rol` enum('superadmin','admin') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'admin',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Contraseña por defecto: ConCEI2026Admin!
--- IMPORTANTE: Cambiar esta contraseña desde el panel de administración después del primer inicio de sesión
-INSERT INTO admin_users (username, password_hash, rol) VALUES
+-- IMPORTANTE: Cambiar después del primer inicio de sesión
+INSERT INTO `admin_users` (`username`, `password_hash`, `rol`) VALUES
 ('admin@dranabel.com', '$2y$10$8He5LuumfIhg45c26wCFbO.mFhUeiDOQrOeekgH0udtr.Ry/N01iO', 'superadmin');
 
--- Sesiones activas del panel de administración. Cada login genera un token
--- que el frontend envía en la cabecera X-Admin-Token; api.php lo valida y
--- aplica un timeout de inactividad (ver ADMIN_SESSION_TIMEOUT_MINUTES en api.php).
-CREATE TABLE admin_sessions (
-    token VARCHAR(64) PRIMARY KEY,
-    admin_id INT NOT NULL,
-    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
-);
+CREATE TABLE IF NOT EXISTS `admin_sessions` (
+  `token` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `admin_id` int NOT NULL,
+  `last_activity` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`token`),
+  KEY `fk-admin_sessions-admin_id` (`admin_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Registro de intentos fallidos de inicio de sesión (admin y usuarios) y de
--- registro, usado para limitar fuerza bruta (ver isRateLimited en api.php).
-CREATE TABLE login_attempts (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    identifier VARCHAR(255) NOT NULL,
-    attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_identifier_time (identifier, attempted_at)
+CREATE TABLE IF NOT EXISTS `login_attempts` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `identifier` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `attempted_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_identifier_time` (`identifier`,`attempted_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==========================================
+-- 6. FOREIGN KEYS
+-- ==========================================
+
+ALTER TABLE `admin_sessions`
+  ADD CONSTRAINT `fk-admin_sessions-admin_id` FOREIGN KEY (`admin_id`) REFERENCES `admin_users` (`id`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_personal`
+  ADD CONSTRAINT `fk-reg_personal-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_evento`
+  ADD CONSTRAINT `fk-reg_evento-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_evento_detalles`
+  ADD CONSTRAINT `fk-reg_evento_detalles-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_contribuciones`
+  ADD CONSTRAINT `fk-reg_contribuciones-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_facturacion`
+  ADD CONSTRAINT `fk-reg_facturacion-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+ALTER TABLE `reg_archivos`
+  ADD CONSTRAINT `fk-reg_archivos-folio` FOREIGN KEY (`folio`) REFERENCES `reg_inscripciones` (`folio`) ON DELETE CASCADE;
+
+COMMIT;
+
+-- ==========================================
+-- 7. MIGRACIÓN (solo para BD ya existentes)
+-- Ejecutar SOLO si la BD ya existe con datos.
+-- NO ejecutar en instalación nueva.
+-- ==========================================
+
+-- Paso 1: limpiar talleres/visitas duplicados
+DELETE d1 FROM reg_evento_detalles d1
+INNER JOIN reg_evento_detalles d2
+    ON  d1.folio     = d2.folio
+    AND d1.item_id   = d2.item_id
+    AND d1.tipo_item = d2.tipo_item
+    AND d1.id > d2.id;
+
+-- Paso 2: agregar UNIQUE KEY si no existe
+SET @exists = (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'reg_evento_detalles'
+      AND INDEX_NAME = 'uq_detalle'
 );
+SET @sql = IF(@exists = 0,
+    'ALTER TABLE reg_evento_detalles ADD UNIQUE KEY uq_detalle (folio, item_id, tipo_item)',
+    'SELECT ''uq_detalle ya existe, sin cambios'' AS info'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
