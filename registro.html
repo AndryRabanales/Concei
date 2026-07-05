@@ -28,12 +28,18 @@
 
     <div class="container">
 
-        <div style="text-align: right; margin-bottom: 20px;">
+        <div id="loginLinkContainer" style="text-align: right; margin-bottom: 20px; display: none;">
             <a href="index.html"
                 style="background: white; padding: 10px 20px; border-radius: 8px; font-weight: 600; color: var(--primary-color); text-decoration: none; box-shadow: var(--shadow-sm); display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s;">
                 <i class="fa-solid fa-arrow-right-to-bracket"></i> ¿Ya tienes una cuenta? Inicia Sesión
             </a>
         </div>
+        <script>
+            // Solo mostrar el link si el usuario NO está en sesión
+            if (!localStorage.getItem('tempAccount')) {
+                document.getElementById('loginLinkContainer').style.display = 'block';
+            }
+        </script>
 
         <form id="registrationForm">
 
@@ -46,11 +52,11 @@
                 <div class="card-body">
                     <div class="form-grid">
                         <div class="form-group">
-                            <label for="firstName">Nombre(s) <span style="color:#dc2626;">*</span></label>
+                            <label for="firstName">Nombre(s) <span style="color:#000;">*</span></label>
                             <input type="text" id="firstName" name="firstName" required>
                         </div>
                         <div class="form-group">
-                            <label for="lastName">Apellido(s) <span style="color:#dc2626;">*</span></label>
+                            <label for="lastName">Apellido(s) <span style="color:#000;">*</span></label>
                             <input type="text" id="lastName" name="lastName" required>
                         </div>
                     </div>

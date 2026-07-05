@@ -59,14 +59,116 @@
             </form>
 
             <div class="login-footer" style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center;">
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 12px; font-weight: 500;">¿Eres un usuario nuevo?</p>
                 <a href="crear-cuenta.html" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 20px; border-radius: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); color: #15803d; border: 1px dashed #bbf7d0; font-weight: 700; text-decoration: none; font-size: 0.95rem; transition: all 0.2s ease; box-shadow: 0 1px 2px rgba(0,0,0,0.05); box-sizing: border-box;">
                     <i class="fa-solid fa-user-plus" style="font-size: 1.1rem;"></i> ¡Crea tu Cuenta y Regístrate Aquí!
                 </a>
+                <p style="margin-top: 14px; font-size: 0.85rem;">
+                    <a href="#" id="forgotPasswordLink" style="color: #64748b; text-decoration: none;">¿Olvidaste tu contraseña?</a>
+                </p>
             </div>
 
         </div>
     </div>
+
+    <!-- Modal: Recuperar contraseña -->
+    <div id="forgotModal" style="display:none;position:fixed;z-index:1000;inset:0;background:rgba(15,23,42,0.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;">
+        <div style="background:white;border-radius:16px;width:90%;max-width:420px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.2);">
+            <div style="background:#1e3a8a;padding:24px 28px;color:white;">
+                <h3 style="margin:0;font-size:1.15rem;"><i class="fa-solid fa-key"></i> Recuperar contraseña</h3>
+            </div>
+            <div style="padding:28px;">
+                <!-- Paso 1: ingresar correo -->
+                <div id="forgotStep1">
+                    <p style="color:#475569;font-size:0.9rem;margin:0 0 16px;">Ingresa tu correo registrado y te enviaremos un código de 6 dígitos.</p>
+                    <div style="margin-bottom:14px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Correo electrónico</label>
+                        <input type="email" id="forgotEmail" placeholder="ejemplo@correo.com" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
+                    </div>
+                    <p id="forgotStep1Msg" style="font-size:0.82rem;color:#ef4444;min-height:18px;margin:0 0 12px;"></p>
+                    <div style="display:flex;gap:10px;">
+                        <button type="button" id="forgotSendBtn" style="flex:1;background:#1e3a8a;color:white;border:none;padding:10px;border-radius:8px;font-weight:700;cursor:pointer;">Enviar código</button>
+                        <button type="button" onclick="document.getElementById('forgotModal').style.display='none'" style="padding:10px 16px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;cursor:pointer;">Cancelar</button>
+                    </div>
+                </div>
+                <!-- Paso 2: ingresar código + nueva contraseña -->
+                <div id="forgotStep2" style="display:none;">
+                    <p style="color:#475569;font-size:0.9rem;margin:0 0 16px;">Ingresa el código que recibiste y tu nueva contraseña.</p>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Código de 6 dígitos</label>
+                        <input type="text" id="forgotCode" maxlength="6" placeholder="000000" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1.2rem;letter-spacing:6px;text-align:center;box-sizing:border-box;font-family:monospace;">
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Nueva contraseña</label>
+                        <input type="password" id="forgotNewPwd" placeholder="Mínimo 6 caracteres" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
+                    </div>
+                    <p id="forgotStep2Msg" style="font-size:0.82rem;color:#ef4444;min-height:18px;margin:0 0 12px;"></p>
+                    <div style="display:flex;gap:10px;">
+                        <button type="button" id="forgotResetBtn" style="flex:1;background:#059669;color:white;border:none;padding:10px;border-radius:8px;font-weight:700;cursor:pointer;">Cambiar contraseña</button>
+                        <button type="button" onclick="document.getElementById('forgotModal').style.display='none'" style="padding:10px 16px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;cursor:pointer;">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('forgotPasswordLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('forgotStep1').style.display = 'block';
+            document.getElementById('forgotStep2').style.display = 'none';
+            document.getElementById('forgotEmail').value = '';
+            document.getElementById('forgotStep1Msg').textContent = '';
+            document.getElementById('forgotModal').style.display = 'flex';
+        });
+
+        document.getElementById('forgotSendBtn').addEventListener('click', async () => {
+            const email = document.getElementById('forgotEmail').value.trim();
+            const msg = document.getElementById('forgotStep1Msg');
+            if (!email) { msg.textContent = 'Ingresa tu correo.'; return; }
+            const btn = document.getElementById('forgotSendBtn');
+            btn.disabled = true; btn.textContent = 'Enviando...';
+            try {
+                const res = await fetch('php/api.php?action=send_verification_code', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ email, type: 'user' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('forgotStep1').style.display = 'none';
+                    document.getElementById('forgotStep2').style.display = 'block';
+                    document.getElementById('forgotStep2Msg').textContent = '';
+                } else {
+                    msg.textContent = data.error || 'Error al enviar.';
+                }
+            } catch(e) { msg.textContent = 'Error de conexión.'; }
+            btn.disabled = false; btn.textContent = 'Enviar código';
+        });
+
+        document.getElementById('forgotResetBtn').addEventListener('click', async () => {
+            const email = document.getElementById('forgotEmail').value.trim();
+            const code = document.getElementById('forgotCode').value.trim();
+            const newPwd = document.getElementById('forgotNewPwd').value;
+            const msg = document.getElementById('forgotStep2Msg');
+            if (!code || !newPwd) { msg.textContent = 'Completa todos los campos.'; return; }
+            const btn = document.getElementById('forgotResetBtn');
+            btn.disabled = true; btn.textContent = 'Cambiando...';
+            try {
+                const res = await fetch('php/api.php?action=verify_reset_code', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ email, code, new_password: newPwd, type: 'user' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('forgotModal').style.display = 'none';
+                    alert('✅ Contraseña cambiada correctamente. Ya puedes iniciar sesión.');
+                } else {
+                    msg.style.color = '#ef4444';
+                    msg.textContent = data.error || 'Error.';
+                }
+            } catch(e) { msg.textContent = 'Error de conexión.'; }
+            btn.disabled = false; btn.textContent = 'Cambiar contraseña';
+        });
+    </script>
 
     <!-- Scripts -->
     <script src="js/login.js?v=2"></script>

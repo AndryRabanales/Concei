@@ -313,13 +313,13 @@ try {
         </tr>" : '';
 
         $emailSubject = $esActualizacion
-            ? "Actualización de Registro ConCEI 2026 — Folio $folio"
-            : "Confirmación de Registro ConCEI 2026 — Folio $folio";
+            ? "Actualización de Registro ConCEI-3 — Folio $folio"
+            : "Confirmación de Registro ConCEI-3 — Folio $folio";
         $emailBody = "
         <div style='font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;'>
 
             <div style='background: #1e3a8a; color: white; padding: 28px 30px;'>
-                <h1 style='margin: 0 0 6px; font-size: 22px;'>Congreso ConCEI 2026</h1>
+                <h1 style='margin: 0 0 6px; font-size: 22px;'>Congreso ConCEI-3</h1>
                 <p style='margin: 0; font-size: 14px; opacity: 0.85;'>Confirmación de Registro</p>
             </div>
 
@@ -327,8 +327,8 @@ try {
 
                 <p style='font-size: 16px;'>Estimado/a <strong style='color: #1e3a8a;'>$nombre $apellido</strong>,</p>
                 <p>" . ($esActualizacion
-                    ? "Hemos recibido una <strong>actualización</strong> a tu registro en el <strong>3er Congreso de Ciencias Exactas e Ingeniería — ConCEI 2026</strong>. A continuación el resumen actualizado de tu compra:"
-                    : "Gracias por registrarte en el <strong>3er Congreso de Ciencias Exactas e Ingeniería — ConCEI 2026</strong>. Hemos recibido tu solicitud correctamente. A continuación encontrarás el resumen de tu registro:") . "</p>
+                    ? "Hemos recibido una <strong>actualización</strong> a tu registro en el <strong>3er Congreso de Ciencias Exactas e Ingeniería — ConCEI-3</strong>. A continuación el resumen actualizado de tu compra:"
+                    : "Gracias por registrarte en el <strong>3er Congreso de Ciencias Exactas e Ingeniería — ConCEI-3</strong>. Hemos recibido tu solicitud correctamente. A continuación encontrarás el resumen de tu registro:") . "</p>
 
                 <!-- Datos personales -->
                 <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 20px 0;'>
@@ -381,7 +381,7 @@ try {
             </div>
 
             <div style='background: #f1f5f9; padding: 15px; text-align: center; font-size: 12px; color: #94a3b8;'>
-                &copy; 2026 Congreso ConCEI 2026 &mdash; Este es un correo automático, por favor no respondas a este mensaje.
+                &copy; 2026 Congreso ConCEI-3 &mdash; Este es un correo automático, por favor no respondas a este mensaje.
             </div>
         </div>
         ";

@@ -108,7 +108,7 @@
             <div class="login-header">
                 <i class="fa-solid fa-user-shield"></i>
                 <h1>Acceso Administrador</h1>
-                <p style="margin-top: 10px; opacity: 0.8; font-size: 0.9rem;">Panel de Gestión Dr. Anabel</p>
+                <p style="margin-top: 10px; opacity: 0.8; font-size: 0.9rem;">Panel de Gestión Congreso ConCEI</p>
             </div>
             <div class="login-body">
                 <div id="errorMessage" class="error-message">
@@ -128,6 +128,9 @@
                     <button type="submit" class="login-btn">
                         Ingresar al Panel <i class="fa-solid fa-arrow-right"></i>
                     </button>
+                    <p style="text-align:center;margin-top:14px;font-size:0.85rem;">
+                        <a href="#" id="adminForgotLink" style="color:#64748b;text-decoration:none;">¿Olvidaste tu contraseña?</a>
+                    </p>
                 </form>
                 <a href="index.html" class="back-link">
                     <i class="fa-solid fa-arrow-left"></i> Volver al sitio principal
@@ -135,6 +138,105 @@
             </div>
         </div>
     </div>
+
+    <!-- Modal: Recuperar contraseña admin -->
+    <div id="adminForgotModal" style="display:none;position:fixed;z-index:1000;inset:0;background:rgba(15,23,42,0.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;">
+        <div style="background:white;border-radius:16px;width:90%;max-width:420px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.2);">
+            <div style="background:#1e293b;padding:24px 28px;color:white;">
+                <h3 style="margin:0;font-size:1.1rem;"><i class="fa-solid fa-key"></i> Recuperar contraseña Admin</h3>
+            </div>
+            <div style="padding:28px;">
+                <div id="adminForgotStep1">
+                    <p style="color:#475569;font-size:0.88rem;margin:0 0 14px;">Ingresa tu correo de administrador. Si tienes un correo de recuperación registrado, recibirás un código ahí.</p>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Correo admin</label>
+                        <input type="email" id="adminForgotEmail" placeholder="admin@dranabel.com" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
+                    </div>
+                    <p id="adminForgotMsg1" style="font-size:0.82rem;color:#ef4444;min-height:18px;margin:0 0 12px;"></p>
+                    <div style="display:flex;gap:10px;">
+                        <button type="button" id="adminForgotSendBtn" style="flex:1;background:#1e293b;color:white;border:none;padding:10px;border-radius:8px;font-weight:700;cursor:pointer;">Enviar código</button>
+                        <button type="button" onclick="document.getElementById('adminForgotModal').style.display='none'" style="padding:10px 16px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;cursor:pointer;">Cancelar</button>
+                    </div>
+                </div>
+                <div id="adminForgotStep2" style="display:none;">
+                    <p style="color:#475569;font-size:0.88rem;margin:0 0 14px;">Ingresa el código recibido y tu nueva contraseña.</p>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Código de 6 dígitos</label>
+                        <input type="text" id="adminForgotCode" maxlength="6" placeholder="000000" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1.2rem;letter-spacing:6px;text-align:center;box-sizing:border-box;font-family:monospace;">
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.85rem;font-weight:600;color:#374151;">Nueva contraseña</label>
+                        <input type="password" id="adminForgotNewPwd" placeholder="Mínimo 6 caracteres" style="width:100%;margin-top:6px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
+                    </div>
+                    <p id="adminForgotMsg2" style="font-size:0.82rem;color:#ef4444;min-height:18px;margin:0 0 12px;"></p>
+                    <div style="display:flex;gap:10px;">
+                        <button type="button" id="adminForgotResetBtn" style="flex:1;background:#059669;color:white;border:none;padding:10px;border-radius:8px;font-weight:700;cursor:pointer;">Cambiar contraseña</button>
+                        <button type="button" onclick="document.getElementById('adminForgotModal').style.display='none'" style="padding:10px 16px;background:#f1f5f9;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;cursor:pointer;">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('adminForgotLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('adminForgotStep1').style.display = 'block';
+            document.getElementById('adminForgotStep2').style.display = 'none';
+            document.getElementById('adminForgotEmail').value = '';
+            document.getElementById('adminForgotMsg1').textContent = '';
+            document.getElementById('adminForgotModal').style.display = 'flex';
+        });
+
+        document.getElementById('adminForgotSendBtn').addEventListener('click', async () => {
+            const email = document.getElementById('adminForgotEmail').value.trim();
+            const msg = document.getElementById('adminForgotMsg1');
+            if (!email) { msg.textContent = 'Ingresa tu correo.'; return; }
+            const btn = document.getElementById('adminForgotSendBtn');
+            btn.disabled = true; btn.textContent = 'Enviando...';
+            try {
+                const res = await fetch('php/api.php?action=send_verification_code', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ email, type: 'admin' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('adminForgotStep1').style.display = 'none';
+                    document.getElementById('adminForgotStep2').style.display = 'block';
+                    document.getElementById('adminForgotMsg2').textContent = '';
+                } else {
+                    msg.style.color = '#ef4444';
+                    msg.textContent = data.error || 'Error al enviar.';
+                }
+            } catch(e) { msg.textContent = 'Error de conexión.'; }
+            btn.disabled = false; btn.textContent = 'Enviar código';
+        });
+
+        document.getElementById('adminForgotResetBtn').addEventListener('click', async () => {
+            const email = document.getElementById('adminForgotEmail').value.trim();
+            const code = document.getElementById('adminForgotCode').value.trim();
+            const newPwd = document.getElementById('adminForgotNewPwd').value;
+            const msg = document.getElementById('adminForgotMsg2');
+            if (!code || !newPwd) { msg.textContent = 'Completa todos los campos.'; return; }
+            const btn = document.getElementById('adminForgotResetBtn');
+            btn.disabled = true; btn.textContent = 'Cambiando...';
+            try {
+                const res = await fetch('php/api.php?action=verify_reset_code', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ email, code, new_password: newPwd, type: 'admin' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('adminForgotModal').style.display = 'none';
+                    alert('✅ Contraseña cambiada correctamente.');
+                } else {
+                    msg.style.color = '#ef4444';
+                    msg.textContent = data.error || 'Error.';
+                }
+            } catch(e) { msg.textContent = 'Error de conexión.'; }
+            btn.disabled = false; btn.textContent = 'Cambiar contraseña';
+        });
+    </script>
 
     <script src="js/admin_v2.js?v=24"></script>
 </body>

@@ -227,6 +227,83 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let editingAdminId = null;
 
+        async function checkRecoveryEmailWarning() {
+            try {
+                const res = await adminFetch(`php/api.php?action=get_admins&t=${Date.now()}`);
+                const data = await res.json();
+                if (!data.success) return;
+                const myUsername = sessionStorage.getItem('adminUsername');
+                const me = (data.admins || []).find(a => a.username === myUsername);
+                if (!me || me.recovery_email) return;
+
+                if (document.getElementById('recoveryWarningBanner')) return;
+
+                const banner = document.createElement('div');
+                banner.id = 'recoveryWarningBanner';
+                banner.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;';
+                banner.innerHTML = `
+                    <i class="fa-solid fa-triangle-exclamation" style="color:#dc2626;font-size:1.3rem;margin-top:2px;flex-shrink:0;"></i>
+                    <div style="flex:1;">
+                        <p style="margin:0 0 6px;font-weight:700;color:#dc2626;font-size:0.95rem;">Sin correo de recuperación registrado</p>
+                        <p style="margin:0 0 10px;color:#7f1d1d;font-size:0.85rem;">Registra un correo Gmail de recuperación para poder restablecer tu contraseña si la olvidas. Sin este correo, necesitarás que un Super Administrador restablezca tu cuenta manualmente.</p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                            <input type="email" id="recoveryEmailInput" placeholder="tucorreo@gmail.com"
+                                style="padding:8px 12px;border:1px solid #fca5a5;border-radius:7px;font-size:0.88rem;flex:1;min-width:200px;max-width:320px;box-sizing:border-box;outline:none;">
+                            <button type="button" id="saveRecoveryEmailBtn" style="background:#dc2626;color:white;border:none;padding:8px 16px;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.85rem;white-space:nowrap;">
+                                <i class="fa-solid fa-floppy-disk"></i> Guardar correo
+                            </button>
+                            <button type="button" id="dismissRecoveryWarning" style="background:transparent;color:#9ca3af;border:none;padding:8px;cursor:pointer;font-size:0.8rem;">
+                                Recordar luego
+                            </button>
+                        </div>
+                        <p id="recoveryEmailMsg" style="margin:6px 0 0;font-size:0.82rem;color:#dc2626;min-height:16px;"></p>
+                    </div>
+                `;
+
+                const mainContent = document.querySelector('.main-content');
+                const dashHeader = mainContent.querySelector('.dashboard-header');
+                mainContent.insertBefore(banner, dashHeader);
+
+                document.getElementById('saveRecoveryEmailBtn').addEventListener('click', async () => {
+                    const email = document.getElementById('recoveryEmailInput').value.trim();
+                    const msg = document.getElementById('recoveryEmailMsg');
+                    if (!email) { msg.textContent = 'Ingresa un correo.'; return; }
+                    const btn = document.getElementById('saveRecoveryEmailBtn');
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+                    try {
+                        const r = await adminFetch('php/api.php?action=set_recovery_email', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: myUsername, recovery_email: email })
+                        });
+                        const d = await r.json();
+                        if (d.success) {
+                            banner.style.cssText = 'background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;';
+                            banner.innerHTML = '<i class="fa-solid fa-circle-check" style="color:#15803d;font-size:1.2rem;"></i><span style="color:#15803d;font-weight:700;">Correo de recuperación guardado correctamente.</span>';
+                            setTimeout(() => banner.remove(), 3000);
+                        } else {
+                            msg.textContent = d.error || 'Error al guardar.';
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Guardar correo';
+                        }
+                    } catch(e) {
+                        msg.textContent = 'Error de conexión.';
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Guardar correo';
+                    }
+                });
+
+                document.getElementById('dismissRecoveryWarning').addEventListener('click', () => {
+                    banner.remove();
+                });
+            } catch(e) {
+                console.error('Error checking recovery email:', e);
+            }
+        }
+
+        checkRecoveryEmailWarning();
+
         function renderAdminDashboard(container, admins) {
             container.innerHTML = `
                 <div class="data-card" style="margin-bottom: 0;">
@@ -245,6 +322,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="form-group" style="margin-bottom: 15px;">
                             <label for="adminPassword" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">Contraseña</label>
                             <input type="password" id="adminPassword" placeholder="${editingAdminId ? 'Nueva contraseña (vacía para conservar)' : 'Mínimo 8 caracteres'}" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label for="adminRecoveryEmail" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">
+                                Correo de recuperación <span style="color:#dc2626;font-size:0.8rem;font-weight:400;">(Gmail recomendado)</span>
+                            </label>
+                            <input type="email" id="adminRecoveryEmail" placeholder="correo@gmail.com (opcional)" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box;">
+                            <p style="font-size:0.78rem;color:#64748b;margin-top:4px;">Este correo recibirá el código para restablecer la contraseña si se olvida.</p>
                         </div>
                         <div class="form-group" style="margin-bottom: 25px;">
                             <label for="adminRole" style="font-weight: 600; display: block; margin-bottom: 6px; font-size: 0.9rem; color: #475569;">Rol</label>
@@ -282,6 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <tr>
                                     <th style="text-align: left; padding: 12px 15px;">Correo</th>
                                     <th style="text-align: left; padding: 12px 15px;">Rol</th>
+                                    <th style="text-align: left; padding: 12px 15px;">Correo recuperación</th>
                                     <th style="text-align: right; padding: 12px 15px;">Acciones</th>
                                 </tr>
                             </thead>
@@ -290,6 +375,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     const isSelf = adm.username === sessionStorage.getItem('adminUsername');
                                     const roleLabel = adm.rol === 'superadmin' ? 'Super Admin' : 'Admin';
                                     const roleClass = adm.rol === 'superadmin' ? 'status-pill-success' : 'status-pill-warning';
+                                    const recoveryBadge = adm.recovery_email
+                                        ? `<span style="font-size:0.8rem;color:#15803d;"><i class="fa-solid fa-circle-check"></i> ${adm.recovery_email}</span>`
+                                        : `<span style="font-size:0.8rem;color:#dc2626;font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> Sin registrar</span>`;
                                     return `
                                         <tr>
                                             <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
@@ -298,6 +386,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                             </td>
                                             <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
                                                 <span class="status-pill ${roleClass}">${roleLabel}</span>
+                                            </td>
+                                            <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
+                                                ${recoveryBadge}
                                             </td>
                                             <td style="padding: 12px 15px; text-align: right; border-bottom: 1px solid var(--border-color);" class="actions">
                                                 <button class="btn-icon btn-edit" onclick="window.editAdmin(${adm.id}, '${adm.username}', '${adm.rol}')" title="Editar"><i class="fa-solid fa-pen"></i></button>
@@ -318,6 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (targetAdmin) {
                     document.getElementById('adminEmail').value = targetAdmin.username;
                     document.getElementById('adminRole').value = targetAdmin.rol;
+                    document.getElementById('adminRecoveryEmail').value = targetAdmin.recovery_email || '';
                 }
             }
 
@@ -328,6 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const email = document.getElementById('adminEmail').value.trim();
                     const password = document.getElementById('adminPassword').value;
                     const role = admins.length === 0 ? 'superadmin' : document.getElementById('adminRole').value;
+                    const recoveryEmailVal = document.getElementById('adminRecoveryEmail').value.trim();
 
                     if (!email) {
                         alert('Por favor, ingresa el correo electrónico.');
@@ -357,6 +450,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                         const result = await response.json();
                         if (result.success) {
+                            // Save recovery email if provided
+                            if (recoveryEmailVal) {
+                                try {
+                                    await adminFetch('php/api.php?action=set_recovery_email', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ username: email, recovery_email: recoveryEmailVal })
+                                    });
+                                } catch(e) {}
+                            }
+
                             alert(result.message || 'Operación realizada con éxito.');
 
                             // If current admin updated their own username, update session storage

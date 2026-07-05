@@ -115,14 +115,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (personalSection) {
                 const updateNotice = document.createElement('div');
                 updateNotice.style.cssText = 'background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;margin-bottom:18px;';
-                updateNotice.innerHTML = `<p style="margin:0 0 10px;color:#1e40af;font-size:0.9rem;font-weight:600;">
+                updateNotice.innerHTML = `<p style="margin:0;color:#1e40af;font-size:0.9rem;font-weight:600;">
                     <i class="fa-solid fa-pen-to-square"></i> Actualiza tus datos personales si es necesario (el correo no puede modificarse).
-                </p>
-                <button type="button" id="savePersonalBtn" style="background:#1e3a8a;color:white;border:none;padding:9px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;">
+                </p>`;
+                personalSection.insertBefore(updateNotice, personalSection.firstChild);
+
+                const saveBtn = document.createElement('div');
+                saveBtn.style.cssText = 'margin-top:16px;';
+                saveBtn.innerHTML = `<button type="button" id="savePersonalBtn" style="background:#1e3a8a;color:white;border:none;padding:9px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;">
                     Guardar datos personales
                 </button>
                 <span id="savePersonalStatus" style="margin-left:12px;font-size:0.85rem;color:#64748b;"></span>`;
-                personalSection.insertBefore(updateNotice, personalSection.firstChild);
+                personalSection.querySelector('.card-body').appendChild(saveBtn);
 
                 document.getElementById('savePersonalBtn').addEventListener('click', async () => {
                     const btn = document.getElementById('savePersonalBtn');
@@ -654,6 +658,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 });
 
+                // Lock modalidad a Presencial en formulario de edición si tipo=poster
+                panel.querySelectorAll('.contrib-edit-form').forEach(editForm => {
+                    const tipoSel = editForm.querySelector('.edit-tipo');
+                    const modSel = editForm.querySelector('.edit-modalidad');
+                    if (tipoSel && modSel) {
+                        const lockPosterEdit = () => {
+                            if (tipoSel.value === 'poster') {
+                                modSel.value = 'presencial';
+                                modSel.disabled = true;
+                            } else {
+                                modSel.disabled = false;
+                            }
+                        };
+                        tipoSel.addEventListener('change', lockPosterEdit);
+                        lockPosterEdit();
+                    }
+                });
+
                 // Mostrar/ocultar form agregar
                 const showAddBtn = panel.querySelector('#showAddContribFormBtn');
                 const addFormDiv = panel.querySelector('#addContribForm');
@@ -661,6 +683,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     showAddBtn.addEventListener('click', () => {
                         addFormDiv.style.display = addFormDiv.style.display === 'none' ? 'block' : 'none';
                     });
+
+                    // Lock modalidad a Presencial en formulario de agregar si tipo=poster
+                    const newTipoSel = panel.querySelector('#new-tipo');
+                    const newModSel = panel.querySelector('#new-modalidad');
+                    if (newTipoSel && newModSel) {
+                        newTipoSel.addEventListener('change', () => {
+                            if (newTipoSel.value === 'poster') {
+                                newModSel.value = 'presencial';
+                                newModSel.disabled = true;
+                            } else {
+                                newModSel.disabled = false;
+                            }
+                        });
+                    }
                     panel.querySelector('#cancelNewContrib')?.addEventListener('click', () => {
                         addFormDiv.style.display = 'none';
                     });
@@ -913,6 +949,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 calculateTotal();
+
+                // Si el panel de pago ya está visible, actualizar comprobante y botón
+                const paymentSectionEl = document.getElementById('paymentRevealSection');
+                if (paymentSectionEl && !paymentSectionEl.classList.contains('hidden')) {
+                    const newTotal = parseFloat((totalDisplay?.textContent || '0').replace(/[^0-9.]/g, '')) || 0;
+                    applyFreeRegistrationUI(paymentSectionEl, newTotal);
+                    const submitBtnEl = document.getElementById('submitBtn');
+                    if (submitBtnEl) {
+                        submitBtnEl.innerHTML = newTotal > 0
+                            ? '<i class="fa-solid fa-cloud-arrow-up"></i> Confirmar Pago y Finalizar Registro'
+                            : '<i class="fa-solid fa-circle-check"></i> Finalizar Registro';
+                    }
+                }
             });
         });
 
@@ -982,6 +1031,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 30000); // Cada 30 segundos
 
         updateWorkshopCapacityStates();
+
+        // Restaurar borrador AHORA que los checkboxes ya existen en el DOM
+        restoreFormDraft();
     }
 
     const facturaRadios = document.querySelectorAll('input[name="factura"]');
@@ -1343,7 +1395,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // ES GRATIS (POR CÓDIGO), SALTAMOS LA REVELACIÓN DE PAGO
                 paymentSection.classList.remove('hidden');
+                paymentSection.classList.add('reveal-active');
                 applyFreeRegistrationUI(paymentSection, totalValue);
+                submitBtn.innerHTML = totalValue > 0
+                    ? '<i class="fa-solid fa-cloud-arrow-up"></i> Confirmar Pago y Finalizar Registro'
+                    : '<i class="fa-solid fa-circle-check"></i> Finalizar Registro';
+                submitBtn.style.background = "#059669";
+                setTimeout(() => {
+                    paymentSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 100);
+                return;
             } else {
                 // --- NUEVO: RESERVAR CUPOS AL HACER CLIC EN EL PRIMER BOTÓN ---
                 const accountData = JSON.parse(localStorage.getItem('tempAccount') || '{}');
@@ -1615,34 +1676,43 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
 
                     // Recopilar contribuciones del formulario para mostrar en confirmacion.html
-                    const contribRowsEls = document.querySelectorAll('.contribution-row');
-                    const contributions = [];
-                    contribRowsEls.forEach(row => {
-                        const titulo = row.querySelector('input[name^="contribTitle_"]')?.value?.trim();
-                        if (titulo) {
-                            contributions.push({
-                                titulo,
-                                tipo: row.querySelector('select[name^="contribType_"]')?.value || '',
-                                area: row.querySelector('select[name^="contribArea_"]')?.value || '',
-                                modalidad: row.querySelector('select[name^="contribModality_"]')?.value || ''
-                            });
-                        }
-                    });
+                    let contributions = [];
+                    try {
+                        const contribRowsEls = document.querySelectorAll('.contribution-row');
+                        contribRowsEls.forEach(row => {
+                            const titulo = row.querySelector('input[name^="contribTitle_"]')?.value?.trim();
+                            if (titulo) {
+                                contributions.push({
+                                    titulo,
+                                    tipo: row.querySelector('select[name^="contribType_"]')?.value || '',
+                                    area: row.querySelector('select[name^="contribArea_"]')?.value || '',
+                                    modalidad: row.querySelector('select[name^="contribModality_"]')?.value || ''
+                                });
+                            }
+                        });
+                    } catch (contribErr) {
+                        console.error("[DEBUG] Error recolectando contribuciones (no crítico):", contribErr);
+                    }
 
                     // El registro YA quedó guardado en la BD (data.success === true).
-                    // Esto debe ejecutarse SIEMPRE para que el comprobante aparezca.
-                    localStorage.setItem('lastRegistration', JSON.stringify({
-                        folio: data.folio,
-                        fullName: fullName,
-                        email: email,
-                        total: totalDisplay ? totalDisplay.textContent : "$0.00",
-                        date: new Date().toLocaleString(),
-                        regTypeLabel,
-                        regTypePrice,
-                        purchaseItems,
-                        contributions,
-                        isReturning: !!window.isReturningUser
-                    }));
+                    // Esto debe ejecutarse SIEMPRE para que el comprobante aparezca,
+                    // sin importar si falló la recolección de detalles opcionales arriba.
+                    try {
+                        localStorage.setItem('lastRegistration', JSON.stringify({
+                            folio: data.folio,
+                            fullName: fullName,
+                            email: email,
+                            total: totalDisplay ? totalDisplay.textContent : "$0.00",
+                            date: new Date().toLocaleString(),
+                            regTypeLabel,
+                            regTypePrice,
+                            purchaseItems,
+                            contributions,
+                            isReturning: !!window.isReturningUser
+                        }));
+                    } catch (storageErr) {
+                        console.error("[DEBUG] Error guardando lastRegistration (no crítico):", storageErr);
+                    }
 
                     console.log("[DEBUG] Redireccionando a confirmacion.html en 1 segundo...");
                     setTimeout(() => {
@@ -1650,7 +1720,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     }, 1000);
                 };
 
-                finalizeRegistration();
+                finalizeRegistration().catch(finalizeErr => {
+                    console.error("[DEBUG] Error inesperado en finalizeRegistration, redirigiendo de todas formas:", finalizeErr);
+                    try {
+                        localStorage.setItem('lastRegistration', JSON.stringify({
+                            folio: data.folio,
+                            fullName: email,
+                            email: email,
+                            total: totalDisplay ? totalDisplay.textContent : "$0.00",
+                            date: new Date().toLocaleString(),
+                            regTypeLabel: '',
+                            regTypePrice: 0,
+                            purchaseItems: [],
+                            contributions: [],
+                            isReturning: !!window.isReturningUser
+                        }));
+                    } catch (e) {}
+                    window.location.href = 'confirmacion.html';
+                });
             } else {
                 throw new Error(data.error || 'Error desconocido');
             }
@@ -1738,6 +1825,23 @@ document.addEventListener('DOMContentLoaded', () => {
             reindexContributions();
             updateAuthorStatusLabel();
         });
+
+        // Bloquear modalidad a Presencial cuando tipo = Poster
+        const tipoSelect = row.querySelector('select[name^="contribType_"]');
+        const applyPosterLock = () => {
+            const container = row.querySelector('.modality-container');
+            const idx = row.dataset.index;
+            if (tipoSelect.value === 'poster') {
+                container.innerHTML = `<div class="readonly-input">Presencial</div><input type="hidden" name="contribModality_${idx}" value="presencial">`;
+            } else if (!isUady && !container.querySelector('select')) {
+                container.innerHTML = `<select name="contribModality_${idx}" class="modality-select">
+                    <option value="presencial">Presencial</option>
+                    <option value="virtual">Virtual</option>
+                    <option value="cualquiera">Cualquiera</option>
+                </select>`;
+            }
+        };
+        if (tipoSelect) tipoSelect.addEventListener('change', applyPosterLock);
 
         return row;
     }
@@ -1882,8 +1986,7 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('change', saveFormDraft);
 
     // Initializations
-    renderDynamicOptions();
-    restoreFormDraft();
+    renderDynamicOptions(); // restoreFormDraft() se llama al final de renderDynamicOptions
     calculateTotal();
     toggleBillingForm();
     updateBenefits();

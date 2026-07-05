@@ -982,7 +982,7 @@ switch ($action) {
             requireAdmin($pdo);
         }
         try {
-            $admins = $pdo->query("SELECT id, username, rol FROM admin_users ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            $admins = $pdo->query("SELECT id, username, rol, recovery_email FROM admin_users ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success' => true, 'admins' => $admins]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1102,6 +1102,153 @@ switch ($action) {
             $count = (int)$stmt->fetch()['total'];
             $nextId = $count + 1;
             echo json_encode(['success' => true, 'next_id' => $nextId]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'send_verification_code':
+        // Envía código de verificación al correo (para registro o recuperación)
+        $data = json_decode(file_get_contents('php://input'), true);
+        $correo = strtolower(trim($data['email'] ?? ''));
+        $tipo   = $data['type'] ?? 'user'; // 'user' | 'admin'
+
+        if (empty($correo) || !filter_var($correo, FILTER_VALIDATE_EMAIL)) {
+            echo json_encode(['success' => false, 'error' => 'Correo inválido.']);
+            break;
+        }
+
+        $rateLimitId = 'reset:' . getClientIp() . ':' . $correo;
+        if (isRateLimited($pdo, $rateLimitId, 3, 15)) {
+            echo json_encode(['success' => false, 'error' => 'Demasiadas solicitudes. Espera 15 minutos.']);
+            break;
+        }
+        recordFailedAttempt($pdo, $rateLimitId);
+
+        // Verificar que el correo exista según el tipo
+        if ($tipo === 'admin') {
+            $stmt = $pdo->prepare("SELECT recovery_email FROM admin_users WHERE username = ?");
+            $stmt->execute([$correo]);
+            $admin = $stmt->fetch();
+            if (!$admin) { echo json_encode(['success' => false, 'error' => 'Administrador no encontrado.']); break; }
+            $destino = $admin['recovery_email'] ?: $correo;
+        } elseif ($tipo === 'register') {
+            // Nuevo usuario: verificar que el correo NO esté ya registrado
+            $stmt = $pdo->prepare("SELECT correo FROM ini_usuarios WHERE correo = ?");
+            $stmt->execute([$correo]);
+            if ($stmt->fetch()) { echo json_encode(['success' => false, 'error' => 'correo_duplicado']); break; }
+            $destino = $correo;
+            $tipo = 'user'; // reusar tipo 'user' en la tabla
+        } else {
+            $stmt = $pdo->prepare("SELECT correo FROM ini_usuarios WHERE correo = ?");
+            $stmt->execute([$correo]);
+            if (!$stmt->fetch()) { echo json_encode(['success' => false, 'error' => 'Correo no registrado.']); break; }
+            $destino = $correo;
+        }
+
+        // Generar código de 6 dígitos
+        $codigo = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expira = date('Y-m-d H:i:s', strtotime('+15 minutes'));
+
+        // Invalidar códigos anteriores
+        $pdo->prepare("UPDATE password_resets SET used = 1 WHERE email = ? AND type = ?")->execute([$correo, $tipo]);
+
+        $pdo->prepare("INSERT INTO password_resets (email, code, type, expires_at) VALUES (?, ?, ?, ?)")
+            ->execute([$correo, $codigo, $tipo, $expira]);
+
+        // Enviar correo
+        try {
+            require_once 'mailer.php';
+            $subject = "Código de verificación ConCEI-3 — $codigo";
+            $body = "
+            <div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;'>
+                <div style='background:#1e3a8a;color:white;padding:24px 28px;'>
+                    <h2 style='margin:0;font-size:18px;'>Congreso ConCEI-3</h2>
+                    <p style='margin:4px 0 0;font-size:13px;opacity:0.85;'>Código de verificación</p>
+                </div>
+                <div style='padding:28px;color:#334155;'>
+                    <p style='font-size:15px;'>Tu código de verificación es:</p>
+                    <div style='font-size:36px;font-weight:700;letter-spacing:8px;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:18px;text-align:center;font-family:monospace;margin:20px 0;'>$codigo</div>
+                    <p style='font-size:13px;color:#64748b;'>Este código expira en <strong>15 minutos</strong>. Si no solicitaste esto, ignora este mensaje.</p>
+                </div>
+                <div style='background:#f1f5f9;padding:12px;text-align:center;font-size:11px;color:#94a3b8;'>
+                    &copy; 2026 Congreso ConCEI-3 &mdash; Correo automático.
+                </div>
+            </div>";
+            sendRegistrationEmail($destino, $subject, $body);
+        } catch (Exception $e) {
+            error_log("Error enviando código: " . $e->getMessage());
+        }
+
+        echo json_encode(['success' => true, 'message' => 'Código enviado.']);
+        break;
+
+    case 'verify_reset_code':
+        // Verifica código y opcionalmente cambia contraseña
+        $data   = json_decode(file_get_contents('php://input'), true);
+        $correo = strtolower(trim($data['email'] ?? ''));
+        $codigo = trim($data['code'] ?? '');
+        $newPwd = $data['new_password'] ?? '';
+        $tipo   = $data['type'] ?? 'user';
+        if ($tipo === 'register') $tipo = 'user'; // registro usa tipo 'user'
+        $onlyCheck = !empty($data['only_check']); // solo verificar sin cambiar password
+
+        if (empty($correo) || empty($codigo)) {
+            echo json_encode(['success' => false, 'error' => 'Datos incompletos.']);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT id FROM password_resets WHERE email = ? AND code = ? AND type = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$correo, $codigo, $tipo]);
+            $reset = $stmt->fetch();
+
+            if (!$reset) {
+                echo json_encode(['success' => false, 'error' => 'Código inválido o expirado.']);
+                break;
+            }
+
+            if ($onlyCheck) {
+                echo json_encode(['success' => true]);
+                break;
+            }
+
+            if (empty($newPwd) || strlen($newPwd) < 6) {
+                echo json_encode(['success' => false, 'error' => 'La contraseña debe tener al menos 6 caracteres.']);
+                break;
+            }
+
+            $hashed = password_hash($newPwd, PASSWORD_DEFAULT);
+
+            if ($tipo === 'admin') {
+                $pdo->prepare("UPDATE admin_users SET password_hash = ? WHERE username = ?")->execute([$hashed, $correo]);
+            } else {
+                $pdo->prepare("UPDATE ini_usuarios SET contrasena = ? WHERE correo = ?")->execute([$hashed, $correo]);
+            }
+
+            // Invalidar el código usado
+            $pdo->prepare("UPDATE password_resets SET used = 1 WHERE id = ?")->execute([$reset['id']]);
+
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'set_recovery_email':
+        // Superadmin o el propio admin puede registrar su correo de recuperación
+        $session = requireAdmin($pdo);
+        $data = json_decode(file_get_contents('php://input'), true);
+        $targetUser = $data['username'] ?? '';
+        $recoveryEmail = trim($data['recovery_email'] ?? '');
+
+        if ($session['rol'] !== 'superadmin' && $session['username'] !== $targetUser) {
+            echo json_encode(['success' => false, 'error' => 'Sin permisos.']);
+            break;
+        }
+        try {
+            $pdo->prepare("UPDATE admin_users SET recovery_email = ? WHERE username = ?")->execute([$recoveryEmail ?: null, $targetUser]);
+            echo json_encode(['success' => true]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
