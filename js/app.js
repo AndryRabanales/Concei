@@ -731,24 +731,31 @@ document.addEventListener('DOMContentLoaded', () => {
         // Helper to create HTML
         const createOptionHtml = (item, type) => {
             const isPurchased = data.purchased && data.purchased.includes(item.id.toString());
+            // Ítem que el propio usuario tiene RESERVADO (seleccionado pero aún sin
+            // pagar): para él debe verse seleccionado y disponible, NUNCA agotado por
+            // su propio apartado. Para los demás usuarios sí cuenta como ocupado.
+            const isReservedByMe = !isPurchased && data.reserved && data.reserved.includes(item.id.toString());
             const hoursMatch = item.hours ? item.hours.match(/\d{1,2}:\d{2}/) : null;
             const shortHours = hoursMatch ? hoursMatch[0] : (item.hours ? item.hours.split(' ')[0] : 'Pdt');
             const current = parseInt(item.cupo_actual) || 0;
             const max = parseInt(item.capacity) || 0;
-            const isFull = current >= max;
+            // Si el ítem es "mío" (reservado por mí) no lo considero agotado aunque el
+            // conteo global lo esté, porque ese conteo me incluye a mí mismo.
+            const isFull = (current >= max) && !isReservedByMe;
 
             return `
-                <div class="addon-option-wrapper ${isFull ? 'option-full' : ''} ${isPurchased ? 'option-purchased' : ''}" 
-                     data-workshop-id="${item.id}" 
-                     data-capacity="${max}" 
-                     data-current="${current}" 
-                     data-purchased="${isPurchased}" 
+                <div class="addon-option-wrapper ${isFull ? 'option-full' : ''} ${isPurchased ? 'option-purchased' : ''}"
+                     data-workshop-id="${item.id}"
+                     data-capacity="${max}"
+                     data-current="${current}"
+                     data-purchased="${isPurchased}"
+                     data-reserved="${isReservedByMe}"
                      data-price="${item.price}">
                     <label class="addon-option ${isFull ? 'disabled' : ''} ${isPurchased ? 'locked-purchased' : ''}">
-                        <input type="checkbox" name="${type}[]" value="${item.id}" 
-                               data-price="${isPurchased ? '0' : item.price}" 
-                               ${isFull && !isPurchased ? 'disabled' : ''} 
-                               ${isPurchased ? 'checked disabled' : ''}>
+                        <input type="checkbox" name="${type}[]" value="${item.id}"
+                               data-price="${isPurchased ? '0' : item.price}"
+                               ${isFull && !isPurchased ? 'disabled' : ''}
+                               ${isPurchased ? 'checked disabled' : (isReservedByMe ? 'checked' : '')}>
                         ${isPurchased ? `<input type="hidden" name="${type}[]" value="${item.id}">` : ''}
                         <div class="addon-content">
                             <div class="addon-header-premium">
@@ -927,6 +934,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         const resp = await fetch('php/reserve_spots.php', {
                             method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ email, workshops: selectedWorkshops, visits: selectedVisits, regType: selectedRegType })
                         });
                         const res = await resp.json();
@@ -1083,11 +1091,13 @@ document.addEventListener('DOMContentLoaded', () => {
         wrappers.forEach(wrapper => {
             const isPurchased = wrapper.getAttribute('data-purchased') === 'true';
             if (isPurchased) return; // Do not touch already purchased ones
-            
+            const isReservedByMe = wrapper.getAttribute('data-reserved') === 'true';
+            if (isReservedByMe) return; // Mi propia reserva no debe marcarse como agotada
+
             const current = parseInt(wrapper.getAttribute('data-current') || 0);
             const max = parseInt(wrapper.getAttribute('data-capacity') || 0);
             const price = wrapper.getAttribute('data-price');
-            
+
             // General gets 2 extra spots
             const allowedLimit = (regType === 'general') ? (max + 2) : max;
             const isFull = current >= allowedLimit;
@@ -1461,7 +1471,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     const reserveRes = await fetch('php/reserve_spots.php', {
                         method: 'POST',
-                        body: JSON.stringify({ email, workshops: selectedWorkshops, visits: selectedVisits })
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, workshops: selectedWorkshops, visits: selectedVisits, regType: selectedRegType ? selectedRegType.value : 'general' })
                     });
                     const reserveData = await reserveRes.json();
 
@@ -1714,6 +1725,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.error("[DEBUG] Error guardando lastRegistration (no crítico):", storageErr);
                     }
 
+                    // El registro se completó: el borrador ya no aplica
+                    try { localStorage.removeItem('registrationDraft'); } catch (e) {}
+
+                    // Cerrar la sesión en TODAS las demás ventanas/pestañas abiertas
+                    // para evitar conflictos (dos ventanas con estados distintos).
+                    // El evento 'storage' solo se dispara en las OTRAS pestañas.
+                    try {
+                        localStorage.removeItem('tempAccount');
+                        localStorage.setItem('forceLogout', String(Date.now()));
+                    } catch (e) {}
+
                     console.log("[DEBUG] Redireccionando a confirmacion.html en 1 segundo...");
                     setTimeout(() => {
                         window.location.href = 'confirmacion.html';
@@ -1735,6 +1757,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             contributions: [],
                             isReturning: !!window.isReturningUser
                         }));
+                    } catch (e) {}
+                    try {
+                        localStorage.removeItem('registrationDraft');
+                        localStorage.removeItem('tempAccount');
+                        localStorage.setItem('forceLogout', String(Date.now()));
                     } catch (e) {}
                     window.location.href = 'confirmacion.html';
                 });
@@ -1922,9 +1949,16 @@ document.addEventListener('DOMContentLoaded', () => {
     addContribBtn.addEventListener('click', addContribution);
 
     // --- Auto-Save (Draft) Logic ---
+    // Email del usuario en sesión: el borrador se asocia a este correo para que
+    // en equipos compartidos un usuario no herede el borrador de otro.
+    function getDraftOwner() {
+        try { return (JSON.parse(localStorage.getItem('tempAccount') || '{}').email || '').toLowerCase(); }
+        catch (e) { return ''; }
+    }
+
     function saveFormDraft() {
         const formData = new FormData(form);
-        const draft = {};
+        const draft = { _draftOwner: getDraftOwner() };
 
         formData.forEach((value, key) => {
             // No guardamos archivos ni contraseñas por seguridad/espacio
@@ -1951,12 +1985,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const draft = JSON.parse(draftStr);
+
+            // El borrador pertenece a otro usuario (equipo compartido): descartarlo.
+            const owner = draft._draftOwner || '';
+            if (owner !== getDraftOwner()) {
+                localStorage.removeItem('registrationDraft');
+                return;
+            }
+
+            // Campos que un usuario recurrente recibe precargados desde el servidor;
+            // el borrador NO debe pisarlos con datos viejos.
+            const camposPrecargados = ['firstName', 'lastName', 'organization', 'city', 'state', 'country', 'regType'];
+
             Object.keys(draft).forEach(key => {
+                if (key === '_draftOwner') return;
+                if (window.isReturningUser && camposPrecargados.includes(key)) return;
                 const elements = form.querySelectorAll(`[name="${key}"]`);
                 const val = draft[key];
 
                 elements.forEach(el => {
                     if (el.type === 'checkbox' || el.type === 'radio') {
+                        // No re-marcar opciones deshabilitadas (talleres agotados/bloqueados)
+                        if (el.disabled) return;
                         if (Array.isArray(val)) {
                             el.checked = val.includes(el.value);
                         } else {
@@ -1998,6 +2048,13 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("--- ADMIN DATA UPDATED, RELOADING OPTIONS ---");
             renderDynamicOptions();
             calculateTotal();
+        }
+        // Otra ventana completó el registro: cerrar sesión aquí para evitar
+        // conflictos (dos ventanas con estados de compra distintos).
+        if (e.key === 'forceLogout') {
+            try { localStorage.removeItem('tempAccount'); } catch (err) {}
+            alert('Tu registro se completó en otra ventana. Esta sesión se cerrará para evitar conflictos.');
+            window.location.href = 'index.html';
         }
     });
 

@@ -176,23 +176,12 @@
             msg.textContent = '';
 
             try {
-                // 1. Verificar código
-                const verifyRes = await fetch('php/api.php?action=verify_reset_code', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, code, type: 'register', only_check: true })
-                });
-                const verifyData = await verifyRes.json();
-                if (!verifyData.success) {
-                    msg.textContent = verifyData.error || 'Código inválido o expirado.';
-                    btn.disabled = false; btn.innerHTML = originalText;
-                    return;
-                }
-
-                // 2. Crear la cuenta
+                // Crear la cuenta: el servidor valida y consume el código de
+                // verificación en el mismo paso (ya no se puede saltar la verificación).
                 const response = await fetch('php/api.php?action=register_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password: pwd, cellphone })
+                    body: JSON.stringify({ email, password: pwd, cellphone, code })
                 });
                 const result = await response.json();
 

@@ -12,16 +12,28 @@ try {
     // Iniciar Transacción para asegurar que todas las ramas se guarden juntas
     $pdo->beginTransaction();
 
-    // 0. Preparar datos base — folio secuencial usando FOR UPDATE (seguro dentro de transacción)
-    $lastNum = $pdo->query("SELECT MAX(CAST(SUBSTRING_INDEX(folio, '-', -1) AS UNSIGNED)) FROM reg_inscripciones FOR UPDATE")->fetchColumn();
-    $nextNum = (int)$lastNum + 1;
-    $folio   = 'CONCEI-2026-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
     $correo = $_POST['email'] ?? '';
 
     // Bug 4 — Validar que el correo no esté vacío y tenga formato válido
     if (empty($correo) || !filter_var($correo, FILTER_VALIDATE_EMAIL)) {
         echo json_encode(['success' => false, 'error' => 'Correo electrónico inválido o no proporcionado.']);
         exit;
+    }
+
+    // 0. Folio basado en el ID de cuenta del usuario (ini_usuarios.id), para que
+    // el folio del comprobante, el asunto del correo y el ID de concepto que ve
+    // el usuario/admin SIEMPRE coincidan (antes se usaba un consecutivo aparte
+    // que se desfasaba si alguien creaba cuenta sin concretar su registro).
+    $stmtAcc = $pdo->prepare("SELECT id FROM ini_usuarios WHERE correo = ?");
+    $stmtAcc->execute([$correo]);
+    $accountId = (int)$stmtAcc->fetchColumn();
+    if ($accountId > 0) {
+        $folio = 'CONCEI-2026-' . str_pad($accountId, 4, '0', STR_PAD_LEFT);
+    } else {
+        // Respaldo (registro sin cuenta, no debería ocurrir en el flujo normal):
+        // consecutivo clásico con FOR UPDATE, seguro dentro de la transacción.
+        $lastNum = $pdo->query("SELECT MAX(CAST(SUBSTRING_INDEX(folio, '-', -1) AS UNSIGNED)) FROM reg_inscripciones FOR UPDATE")->fetchColumn();
+        $folio = 'CONCEI-2026-' . str_pad((int)$lastNum + 1, 4, '0', STR_PAD_LEFT);
     }
 
     // Detectar si es primera vez o actualización
@@ -43,12 +55,17 @@ try {
         else                                $prevVisitIds[]    = $old['item_id'];
     }
 
-    // Preservar contribuciones antes del DELETE CASCADE
+    // Preservar contribuciones y facturación antes del DELETE CASCADE
     $prevContributions = [];
+    $prevBilling = null;
     if ($esActualizacion) {
         $stmtOldContrib = $pdo->prepare("SELECT tipo, area, modalidad, titulo, revista FROM reg_contribuciones c JOIN reg_inscripciones i ON c.folio = i.folio WHERE i.correo = ?");
         $stmtOldContrib->execute([$correo]);
         $prevContributions = $stmtOldContrib->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtOldBill = $pdo->prepare("SELECT f.razon, f.rfc, f.direccion, f.cp, f.ciudad, f.estado, f.correo AS bill_correo FROM reg_facturacion f JOIN reg_inscripciones i ON f.folio = i.folio WHERE i.correo = ? LIMIT 1");
+        $stmtOldBill->execute([$correo]);
+        $prevBilling = $stmtOldBill->fetch(PDO::FETCH_ASSOC) ?: null;
     }
 
     $stmtDelete = $pdo->prepare("DELETE FROM reg_inscripciones WHERE correo = ?");
@@ -74,10 +91,11 @@ try {
     $total = $_POST['total_hidden'] ?? '$0.00';
     $concepto = $_POST['concept_hidden'] ?? 'N/A';
 
-    // Seguridad: en actualizaciones recalcular el total sumando los ítems nuevos
-    // desde la BD para evitar que el frontend aplique el descuento de taller gratis
-    // en compras adicionales (el descuento solo aplica en la primera compra).
+    // Seguridad: el total SIEMPRE se recalcula del lado servidor desde la BD.
+    // Nunca se confía en el total_hidden del navegador porque el cliente
+    // puede manipularlo (precios, descuento de taller gratis, etc.).
     if ($esActualizacion) {
+        // Actualización: solo se cobran los ítems NUEVOS, sin descuento.
         $newWorkshops = array_diff(isset($_POST['workshop']) ? array_unique((array)$_POST['workshop']) : [], $prevWorkshopIds);
         $newVisits    = array_diff(isset($_POST['visit'])    ? array_unique((array)$_POST['visit'])    : [], $prevVisitIds);
 
@@ -94,7 +112,39 @@ try {
         }
 
         // Reconstruir total: base ya pagada ($0 en actualización) + nuevos ítems
-        $total = '$' . number_format($extraTotal, 2);
+        // (number_format sin separador de miles: "$1,000.00" rompe parseos posteriores)
+        $total = '$' . number_format($extraTotal, 2, '.', '');
+    } else {
+        // Primer registro: precio base del tipo (cat_ajustes) + talleres/visitas.
+        $stmtBase = $pdo->prepare("SELECT valor FROM cat_ajustes WHERE clave = ?");
+        $stmtBase->execute([$tipo]);
+        $serverTotal = (float)($stmtBase->fetchColumn() ?: 0); // code_access no está en cat_ajustes => base $0
+
+        // Precios reales de los ítems seleccionados
+        $itemPrices = [];
+        foreach (array_unique((array)($_POST['workshop'] ?? [])) as $wid) {
+            $r = $pdo->prepare("SELECT precio FROM cat_talleres WHERE id = ?");
+            $r->execute([$wid]);
+            $p = $r->fetchColumn();
+            if ($p !== false) $itemPrices[] = (float)$p;
+        }
+        foreach (array_unique((array)($_POST['visit'] ?? [])) as $vid) {
+            $r = $pdo->prepare("SELECT precio FROM cat_visitas WHERE id = ?");
+            $r->execute([$vid]);
+            $p = $r->fetchColumn();
+            if ($p !== false) $itemPrices[] = (float)$p;
+        }
+        $serverTotal += array_sum($itemPrices);
+
+        // Descuento "taller gratis" solo en primera compra: aplica a general,
+        // student_external y code_access (misma regla que el frontend).
+        // El ítem con costo más barato queda en $0. UADY no recibe descuento.
+        $paidPrices = array_filter($itemPrices, function ($p) { return $p > 0; });
+        if (in_array($tipo, ['general', 'student_external', 'code_access'], true) && count($paidPrices) > 0) {
+            $serverTotal -= min($paidPrices); // el más barato es gratis
+        }
+
+        $total = '$' . number_format(max(0, $serverTotal), 2, '.', '');
     }
 
     $stmt3 = $pdo->prepare("INSERT INTO reg_evento (folio, tipo, total, concepto) VALUES (?, ?, ?, ?)");
@@ -105,14 +155,22 @@ try {
     $stmtConcepto->execute([$correo, $folio, $concepto, $total]);
 
     // 3.1 DETALLES DE EVENTO (Talleres y Visitas)
-    if (isset($_POST['workshop'])) {
-        $workshops = array_unique((array)$_POST['workshop']);
+    // IMPORTANTE: como el DELETE por correo borró (CASCADE) los detalles del folio
+    // anterior, aquí se reinsertan. Para NO perder compras previas cuando el
+    // navegador manda datos viejos (p. ej. dos ventanas abiertas), se hace la UNIÓN
+    // de lo que llega en el POST con lo que el usuario YA tenía comprado en la BD
+    // (prevWorkshopIds/prevVisitIds). Así una compra hecha en otra ventana nunca se
+    // pierde. La verificación de cupo solo se aplica a los ítems NUEVOS.
+    $postWorkshops = array_map('strval', array_unique((array)($_POST['workshop'] ?? [])));
+    $workshops = array_values(array_unique(array_merge($postWorkshops, array_map('strval', $prevWorkshopIds))));
+    if (!empty($workshops)) {
         foreach ($workshops as $w_id) {
-            // VERIFICAR CUPO EN TIEMPO REAL (Seguridad extra)
+            if (in_array($w_id, $prevWorkshopIds)) continue; // ya comprado: conserva su lugar, no re-verificar
+            // VERIFICAR CUPO EN TIEMPO REAL (Seguridad extra) solo para ítems nuevos
             $stmtCheck = $pdo->prepare("SELECT nombre, cupo, cupo_actual FROM cat_talleres WHERE id = ? FOR UPDATE");
             $stmtCheck->execute([$w_id]);
             $item = $stmtCheck->fetch();
-            
+
             if ($item) {
                 $actual = syncCapacity($pdo, $w_id, 'workshop');
                 $limit = (int)$item['cupo'];
@@ -130,14 +188,16 @@ try {
             $stmtW->execute([$folio, $w_id]);
         }
     }
-    if (isset($_POST['visit'])) {
-        $visits = array_unique((array)$_POST['visit']);
+    $postVisits = array_map('strval', array_unique((array)($_POST['visit'] ?? [])));
+    $visits = array_values(array_unique(array_merge($postVisits, array_map('strval', $prevVisitIds))));
+    if (!empty($visits)) {
         foreach ($visits as $v_id) {
-            // VERIFICAR CUPO EN TIEMPO REAL
+            if (in_array($v_id, $prevVisitIds)) continue; // ya comprada: conserva su lugar
+            // VERIFICAR CUPO EN TIEMPO REAL solo para ítems nuevos
             $stmtCheck = $pdo->prepare("SELECT nombre, cupo, cupo_actual FROM cat_visitas WHERE id = ? FOR UPDATE");
             $stmtCheck->execute([$v_id]);
             $item = $stmtCheck->fetch();
-            
+
             if ($item) {
                 $actual = syncCapacity($pdo, $v_id, 'visit');
                 if ($actual > (int)$item['cupo']) {
@@ -167,10 +227,20 @@ try {
             $newContribInserted = true;
         }
     }
-    // Si es actualización y no se enviaron contribuciones nuevas, restaurar las anteriores
-    if ($esActualizacion && !$newContribInserted && !empty($prevContributions)) {
+    // Si es actualización, restaurar SIEMPRE las contribuciones anteriores que no
+    // vengan repetidas en el POST. Antes solo se restauraban cuando no llegaba
+    // ninguna nueva, y si el usuario enviaba 1 nueva se perdían las previas.
+    if ($esActualizacion && !empty($prevContributions)) {
+        // Títulos ya insertados en esta pasada (normalizados) para no duplicar
+        $titulosNuevos = [];
+        for ($i = 1; $i <= 2; $i++) {
+            if (!empty($_POST["contribTitle_$i"])) {
+                $titulosNuevos[] = mb_strtolower(trim($_POST["contribTitle_$i"]));
+            }
+        }
         $stmtC = $pdo->prepare("INSERT INTO reg_contribuciones (folio, tipo, area, modalidad, titulo, revista) VALUES (?, ?, ?, ?, ?, ?)");
         foreach ($prevContributions as $pc) {
+            if (in_array(mb_strtolower(trim($pc['titulo'])), $titulosNuevos, true)) continue; // ya reenviada
             $stmtC->execute([$folio, $pc['tipo'], $pc['area'], $pc['modalidad'], $pc['titulo'], $pc['revista']]);
         }
     }
@@ -187,6 +257,11 @@ try {
 
         $stmt4 = $pdo->prepare("INSERT INTO reg_facturacion (folio, razon, rfc, direccion, cp, ciudad, estado, correo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt4->execute([$folio, $razon, $rfc, $dir, $cp, $fCiudad, $fEstado, $fCorreo]);
+    } elseif ($esActualizacion && $prevBilling) {
+        // El usuario ya tenía datos fiscales y en esta actualización no envió
+        // nuevos: restaurarlos para que el DELETE CASCADE no los pierda.
+        $stmt4 = $pdo->prepare("INSERT INTO reg_facturacion (folio, razon, rfc, direccion, cp, ciudad, estado, correo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt4->execute([$folio, $prevBilling['razon'], $prevBilling['rfc'], $prevBilling['direccion'], $prevBilling['cp'], $prevBilling['ciudad'], $prevBilling['estado'], $prevBilling['bill_correo']]);
     }
 
     // 5. RAMA ARCHIVOS (reg_documentos) — historial append-only por correo,
@@ -212,13 +287,12 @@ try {
         }
     }
 
-    // Si se usó un código, marcarlo como usado
+    // Si se usó un código, marcarlo como usado y registrar QUIÉN lo usó
+    // (correo) y cuándo, para poder rastrearlo desde el panel de admin.
     if ($tipo === 'code_access') {
         $codigo = $_POST['specialCode'] ?? '';
-        error_log("REGISTER.PHP: Intentando invalidar código: " . $codigo);
-        $stmtCode = $pdo->prepare("UPDATE cat_codigos SET usado = 1 WHERE id = ?");
-        $stmtCode->execute([$codigo]);
-        error_log("REGISTER.PHP: Filas afectadas: " . $stmtCode->rowCount());
+        $stmtCode = $pdo->prepare("UPDATE cat_codigos SET usado = 1, usado_por = ?, fecha_uso = NOW() WHERE id = ?");
+        $stmtCode->execute([$correo, $codigo]);
     }
 
     // Limpiar reserva temporal ya que el registro es definitivo

@@ -12,6 +12,16 @@ ini_set('display_errors', 0);
 // - 'revision_pendiente' si hay documentos pero aún falta resolver alguno
 // - 'pendiente'          si aún no se ha subido ningún documento
 function recalcEstatusDocumentos($pdo, $correo) {
+    // Si el administrador fijó un estatus MANUALMENTE (update_reg_status),
+    // el recálculo automático no debe pisarlo. El flag se resetea cuando el
+    // usuario sube un documento nuevo o el admin revisa un documento.
+    $stmtCur = $pdo->prepare("SELECT folio, estatus, estatus_manual FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
+    $stmtCur->execute([$correo]);
+    $cur = $stmtCur->fetch();
+    if ($cur && (int)$cur['estatus_manual'] === 1) {
+        return $cur['estatus'];
+    }
+
     // Solo se considera la subida MÁS RECIENTE de cada tipo de documento.
     // Si un documento fue rechazado y luego se volvió a subir y aceptar,
     // la subida anterior (rechazada) ya no debe contar para el estatus general.
@@ -36,14 +46,17 @@ function recalcEstatusDocumentos($pdo, $correo) {
     elseif ($hasDocs) $newStatus = 'revision_pendiente';
     else $newStatus = 'pendiente';
 
-    $stmtCurFolio = $pdo->prepare("SELECT folio FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
-    $stmtCurFolio->execute([$correo]);
-    $curFolio = $stmtCurFolio->fetchColumn();
-    if ($curFolio) {
-        $pdo->prepare("UPDATE reg_inscripciones SET estatus = ? WHERE folio = ?")->execute([$newStatus, $curFolio]);
+    if ($cur && $cur['folio']) {
+        $pdo->prepare("UPDATE reg_inscripciones SET estatus = ? WHERE folio = ?")->execute([$newStatus, $cur['folio']]);
     }
 
     return $newStatus;
+}
+
+// Vuelve el estatus del registro al modo automático (quita el candado manual).
+// Se llama cuando hay nueva evidencia: subida de documento o revisión del admin.
+function resetEstatusManual($pdo, $correo) {
+    $pdo->prepare("UPDATE reg_inscripciones SET estatus_manual = 0 WHERE correo = ?")->execute([$correo]);
 }
 
 // --- Seguridad: límite de intentos y sesiones de administrador ---
@@ -109,11 +122,13 @@ switch ($action) {
             // Limpiar reservas antiguas antes de cargar
             $pdo->prepare("DELETE FROM reg_reservas_temp WHERE updated_at < NOW() - INTERVAL 30 MINUTE")->execute();
 
-            // Traducimos los nombres de las columnas para que el JS los entienda siempre
-            $workshops = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_talleres")->fetchAll(PDO::FETCH_ASSOC);
-            $visits = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_visitas")->fetchAll(PDO::FETCH_ASSOC);
+            // Traducimos los nombres de las columnas para que el JS los entienda siempre.
+            // Orden numérico por id (ws1, ws2, ... ws31) para que T01..T31 salgan en orden.
+            $workshops = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_talleres ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
+            $visits = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_visitas ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
             $settings = $pdo->query("SELECT * FROM cat_ajustes")->fetchAll(PDO::FETCH_ASSOC);
-            $codes = $pdo->query("SELECT * FROM cat_codigos")->fetchAll(PDO::FETCH_ASSOC);
+            // Público: NO exponer usado_por/fecha_uso (datos sensibles de rastreo).
+            $codes = $pdo->query("SELECT id, usado, fecha FROM cat_codigos")->fetchAll(PDO::FETCH_ASSOC);
 
             $prices = [];
             foreach ($settings as $s) {
@@ -140,6 +155,24 @@ switch ($action) {
                 ");
                 $stmtP->execute([$email]);
                 $purchased = $stmtP->fetchAll(PDO::FETCH_COLUMN);
+
+                // Ítems que el usuario tiene en su RESERVA TEMPORAL propia (aún sin
+                // pagar). Sirve para que, al volver, sus propias selecciones se vean
+                // como "seleccionadas" y NO como "agotadas" por su propio apartado.
+                $stmtR = $pdo->prepare("SELECT items_json FROM reg_reservas_temp WHERE correo = ?");
+                $stmtR->execute([$email]);
+                $reservaJson = $stmtR->fetchColumn();
+                $reserved = [];
+                if ($reservaJson) {
+                    $dec = json_decode($reservaJson, true);
+                    if (is_array($dec)) {
+                        foreach (['workshops', 'visits'] as $k) {
+                            if (!empty($dec[$k]) && is_array($dec[$k])) {
+                                foreach ($dec[$k] as $rid) $reserved[] = (string)$rid;
+                            }
+                        }
+                    }
+                }
 
                 // Get personal info (including e.concepto to preserve original concept format if needed)
                 $stmtU = $pdo->prepare("
@@ -170,6 +203,7 @@ switch ($action) {
                 'prices' => $prices,
                 'code' => $codes,
                 'purchased' => $purchased,
+                'reserved' => $reserved,
                 'userInfo' => $userInfo,
                 'contributions' => $userContributions ?? [],
                 'accountId' => $accountId
@@ -240,10 +274,11 @@ switch ($action) {
                         CONCAT_WS(' (', v.nombre, CONCAT(v.horario, ' $', v.precio, ')'))
                         ORDER BY v.nombre SEPARATOR ' | '
                     ) AS visitas,
-                    GROUP_CONCAT(DISTINCT
-                        CONCAT_WS(' - ', c.titulo, c.tipo, c.area, c.modalidad, c.revista)
-                        ORDER BY c.id SEPARATOR ' | '
-                    ) AS contribuciones
+                    -- Monto total ACUMULADO: suma de todos los pagos generados
+                    -- (reg_conceptos_historial es append-only y sobrevive a las
+                    -- sobreescrituras de folio). Se limpia '$' y ',' antes de sumar.
+                    (SELECT SUM(CAST(REPLACE(REPLACE(h.total, '$', ''), ',', '') AS DECIMAL(10,2)))
+                       FROM reg_conceptos_historial h WHERE h.correo = r.correo) AS total_acumulado
                 FROM reg_inscripciones r
                 LEFT JOIN reg_personal p        ON r.folio = p.folio
                 LEFT JOIN ini_usuarios u         ON r.correo = u.correo
@@ -253,12 +288,63 @@ switch ($action) {
                 LEFT JOIN cat_talleres t         ON dt.item_id = t.id
                 LEFT JOIN reg_evento_detalles dv ON r.folio = dv.folio AND dv.tipo_item = 'visita'
                 LEFT JOIN cat_visitas v          ON dv.item_id = v.id
-                LEFT JOIN reg_contribuciones c   ON r.folio = c.folio
                 GROUP BY r.folio
                 ORDER BY CAST(e.concepto AS UNSIGNED) ASC, r.fecha_inscripcion DESC
             ";
             $rows = $pdo->query($query)->fetchAll(PDO::FETCH_ASSOC);
+
+            // Contribuciones por folio (máx. 2), en columnas separadas para el CSV.
+            // Se hace en consulta aparte para no inflar los GROUP_CONCAT anteriores
+            // por producto cartesiano y para partir cada campo limpiamente.
+            $contribStmt = $pdo->query("SELECT folio, titulo, tipo, area, modalidad, revista FROM reg_contribuciones ORDER BY folio, id");
+            $contribByFolio = [];
+            foreach ($contribStmt as $c) {
+                $contribByFolio[$c['folio']][] = $c;
+            }
+            foreach ($rows as &$row) {
+                $cs = $contribByFolio[$row['folio']] ?? [];
+                for ($i = 0; $i < 2; $i++) {
+                    $c = $cs[$i] ?? null;
+                    $n = $i + 1;
+                    $row["contrib_titulo$n"]    = $c['titulo']    ?? '';
+                    $row["contrib_tipo$n"]      = $c['tipo']      ?? '';
+                    $row["contrib_area$n"]      = $c['area']      ?? '';
+                    $row["contrib_modalidad$n"] = $c['modalidad'] ?? '';
+                    $row["contrib_revista$n"]   = $c['revista']   ?? '';
+                }
+            }
+            unset($row);
+
             echo json_encode(['success' => true, 'registrations' => $rows]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'get_workshop_roster':
+        // Lista de alumnos inscritos en cada taller y visita (para el reporte
+        // "alumnos por taller"). Devuelve, por cada ítem, sus participantes.
+        requireAdmin($pdo);
+        try {
+            $sql = "
+                SELECT cat.tipo_item, cat.id AS item_id, cat.nombre AS item_nombre,
+                       cat.horario, cat.modalidad, cat.cupo,
+                       p.nombre, p.apellido, r.correo AS email, u.telefono,
+                       p.institucion, r.folio, e.concepto
+                FROM (
+                    SELECT id, nombre, horario, modalidad, cupo, 'taller' AS tipo_item FROM cat_talleres
+                    UNION ALL
+                    SELECT id, nombre, horario, modalidad, cupo, 'visita' AS tipo_item FROM cat_visitas
+                ) cat
+                JOIN reg_evento_detalles d ON d.item_id = cat.id AND d.tipo_item = cat.tipo_item
+                JOIN reg_inscripciones r   ON d.folio = r.folio
+                LEFT JOIN reg_personal p   ON r.folio = p.folio
+                LEFT JOIN ini_usuarios u   ON r.correo = u.correo
+                LEFT JOIN reg_evento e     ON r.folio = e.folio
+                ORDER BY cat.tipo_item, CAST(REGEXP_REPLACE(cat.id, '[^0-9]', '') AS UNSIGNED), cat.id, p.apellido, p.nombre
+            ";
+            $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'roster' => $rows]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
@@ -494,17 +580,53 @@ switch ($action) {
         $data = json_decode(file_get_contents('php://input'), true);
         $type = $_GET['type'] ?? 'workshop';
         $table = ($type === 'workshop') ? 'cat_talleres' : 'cat_visitas';
+        $prefix = ($type === 'workshop') ? 'T' : 'V';
+        $seqKey = ($type === 'workshop') ? 'seq_taller' : 'seq_visita';
 
         try {
-            $cupo_actual = isset($data['cupo_actual']) ? $data['cupo_actual'] : 0;
-            $activo = isset($data['activo']) ? (int)$data['activo'] : 1;
-            $stmt = $pdo->prepare("REPLACE INTO $table (id, nombre, descripcion, precio, horario, instructor, dependencia, modalidad, cupo, cupo_actual, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([
-                $data['id'], $data['name'], $data['description'], $data['price'],
-                $data['hours'], $data['instructor'], $data['dependency'],
-                $data['modality'], $data['capacity'], $cupo_actual, $activo
-            ]);
-            echo json_encode(['success' => true]);
+            $clientId = trim($data['id'] ?? '');
+
+            // ¿Es EDICIÓN? Solo si el id enviado ya existe en el catálogo.
+            $existe = false;
+            if ($clientId !== '') {
+                $chk = $pdo->prepare("SELECT 1 FROM $table WHERE id = ?");
+                $chk->execute([$clientId]);
+                $existe = (bool)$chk->fetchColumn();
+            }
+
+            if ($existe) {
+                // EDICIÓN: el ID es inmutable, solo se actualizan los demás campos.
+                $stmt = $pdo->prepare("UPDATE $table SET nombre=?, descripcion=?, precio=?, horario=?, instructor=?, dependencia=?, modalidad=?, cupo=?, activo=? WHERE id=?");
+                $stmt->execute([
+                    $data['name'], $data['description'], $data['price'], $data['hours'],
+                    $data['instructor'], $data['dependency'], $data['modality'],
+                    $data['capacity'], isset($data['activo']) ? (int)$data['activo'] : 1,
+                    $clientId
+                ]);
+                echo json_encode(['success' => true, 'id' => $clientId]);
+            } else {
+                // ALTA: el servidor asigna el siguiente ID secuencial (T01, T02, ...).
+                // Se usa un contador en cat_ajustes que SOLO incrementa, de modo que
+                // un ID eliminado nunca se reutiliza. El id del cliente se ignora.
+                $maxExisting = (int)$pdo->query("SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(id,'[^0-9]','') AS UNSIGNED)),0) FROM $table")->fetchColumn();
+                $seqStmt = $pdo->prepare("SELECT valor FROM cat_ajustes WHERE clave = ?");
+                $seqStmt->execute([$seqKey]);
+                $storedSeq = (int)($seqStmt->fetchColumn() ?: 0);
+                $next = max($maxExisting, $storedSeq) + 1;
+                $pdo->prepare("INSERT INTO cat_ajustes (clave, valor) VALUES (?, ?) ON DUPLICATE KEY UPDATE valor = ?")
+                    ->execute([$seqKey, $next, $next]);
+                $newId = $prefix . str_pad($next, 2, '0', STR_PAD_LEFT);
+
+                $cupo_actual = isset($data['cupo_actual']) ? $data['cupo_actual'] : 0;
+                $activo = isset($data['activo']) ? (int)$data['activo'] : 1;
+                $stmt = $pdo->prepare("INSERT INTO $table (id, nombre, descripcion, precio, horario, instructor, dependencia, modalidad, cupo, cupo_actual, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([
+                    $newId, $data['name'], $data['description'], $data['price'],
+                    $data['hours'], $data['instructor'], $data['dependency'],
+                    $data['modality'], $data['capacity'], $cupo_actual, $activo
+                ]);
+                echo json_encode(['success' => true, 'id' => $newId]);
+            }
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
@@ -556,20 +678,36 @@ switch ($action) {
         break;
 
     case 'verify_code':
-        $code = $_GET['code'] ?? '';
+        // Verifica Y consume el código en una sola operación atómica.
+        // Esto elimina la ventana en la que dos personas podían validar el
+        // mismo código a la vez (antes verificar y marcar eran dos pasos).
+        $code = trim($_GET['code'] ?? '');
+
+        // Rate limit por IP para impedir enumeración de códigos por fuerza bruta
+        $codeCheckId = 'codecheck:' . getClientIp();
+        if (isRateLimited($pdo, $codeCheckId, 10, 15)) {
+            http_response_code(429);
+            echo json_encode(['success' => false, 'error' => 'Demasiados intentos. Espera unos minutos.']);
+            break;
+        }
+
         try {
-            $stmt = $pdo->prepare("SELECT * FROM cat_codigos WHERE id = ?");
+            $stmt = $pdo->prepare("UPDATE cat_codigos SET usado = 1 WHERE id = ? AND usado = 0");
             $stmt->execute([$code]);
-            $codeData = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($codeData) {
-                if ($codeData['usado'] == 1) {
+
+            if ($stmt->rowCount() > 0) {
+                clearFailedAttempts($pdo, $codeCheckId);
+                echo json_encode(['success' => true, 'message' => 'Código válido.']);
+            } else {
+                recordFailedAttempt($pdo, $codeCheckId);
+                $exists = $pdo->prepare("SELECT usado FROM cat_codigos WHERE id = ?");
+                $exists->execute([$code]);
+                $row = $exists->fetch();
+                if ($row) {
                     echo json_encode(['success' => false, 'error' => 'Este código ya ha sido utilizado.']);
                 } else {
-                    echo json_encode(['success' => true, 'message' => 'Código válido.']);
+                    echo json_encode(['success' => false, 'error' => 'El código ingresado no existe.']);
                 }
-            } else {
-                echo json_encode(['success' => false, 'error' => 'El código ingresado no existe.']);
             }
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -577,23 +715,38 @@ switch ($action) {
         break;
 
     case 'mark_code_used':
-        $code = $_GET['code'] ?? '';
+        // LEGACY: el consumo del código ahora ocurre atómicamente en verify_code.
+        // Se conserva la acción para compatibilidad con JS cacheado: responde
+        // éxito si el código ya está consumido, sin permitir quemar códigos
+        // ajenos (ya no invalida nada por sí misma).
+        $code = trim($_GET['code'] ?? '');
         try {
-            error_log("Intentando marcar código como usado: " . $code);
-            // Solo marcar si aún no ha sido usado (usado = 0)
-            $stmt = $pdo->prepare("UPDATE cat_codigos SET usado = 1 WHERE id = ? AND usado = 0");
+            $stmt = $pdo->prepare("SELECT usado FROM cat_codigos WHERE id = ?");
             $stmt->execute([$code]);
-            
-            $count = $stmt->rowCount();
-            error_log("Filas afectadas: " . $count);
-
-            if ($count > 0) {
+            $row = $stmt->fetch();
+            if ($row && (int)$row['usado'] === 1) {
                 echo json_encode(['success' => true, 'message' => 'Código invalidado correctamente.']);
             } else {
                 echo json_encode(['success' => false, 'error' => 'El código ya estaba invalidado o no existe.']);
             }
         } catch (Exception $e) {
-            error_log("ERROR en mark_code_used: " . $e->getMessage());
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'get_codes':
+        // Listado de códigos para el admin, con rastreo de quién lo usó.
+        requireAdmin($pdo);
+        try {
+            $codes = $pdo->query("
+                SELECT c.id, c.usado, c.usado_por, c.fecha_uso, c.fecha AS date,
+                       u.id AS usado_por_id
+                FROM cat_codigos c
+                LEFT JOIN ini_usuarios u ON u.correo = c.usado_por
+                ORDER BY c.fecha DESC, c.id
+            ")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'codes' => $codes]);
+        } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
         break;
@@ -660,6 +813,9 @@ switch ($action) {
             $pdo->prepare("UPDATE reg_documentos SET estado=?, comentario=?, revisado_por=?, fecha_revision=? WHERE id=?")
                 ->execute([$estado, $comentario, $revisado_por, $fechaRevision, $id]);
 
+            // La revisión de un documento es una acción explícita del admin:
+            // el estatus vuelve al modo automático basado en documentos.
+            resetEstatusManual($pdo, $correo);
             $newStatus = recalcEstatusDocumentos($pdo, $correo);
 
             // Notificar por correo cuando el estatus general cambia a "aceptado"
@@ -721,7 +877,9 @@ switch ($action) {
         requireAdmin($pdo);
         $data = json_decode(file_get_contents('php://input'), true);
         try {
-            $stmt = $pdo->prepare("UPDATE reg_inscripciones SET estatus = ? WHERE folio = ?");
+            // El estatus fijado por el admin queda "bloqueado" (estatus_manual=1)
+            // para que el recálculo automático no lo revierta.
+            $stmt = $pdo->prepare("UPDATE reg_inscripciones SET estatus = ?, estatus_manual = 1 WHERE folio = ?");
             $stmt->execute([$data['status'], $data['folio']]);
             echo json_encode(['success' => true]);
         } catch (Exception $e) {
@@ -831,6 +989,8 @@ switch ($action) {
             // Cada subida es un registro NUEVO en el historial, asociado al folio actual.
             $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado) VALUES (?,?,?,?,NOW(),'pendiente')")
                 ->execute([$correo, $currentFolio, $tipo_doc, $filename]);
+            // Documento nuevo = nueva evidencia: quitar candado manual y recalcular
+            resetEstatusManual($pdo, $correo);
             $newStatus = recalcEstatusDocumentos($pdo, $correo);
             echo json_encode(['success' => true, 'filename' => $filename, 'newStatus' => $newStatus]);
         } catch (Exception $e) {
@@ -865,11 +1025,22 @@ switch ($action) {
     
     case 'register_user':
         $data = json_decode(file_get_contents('php://input'), true);
-        $correo = $data['email'] ?? '';
+        $correo = strtolower(trim($data['email'] ?? ''));
         $pass = $data['password'] ?? '';
         $tel = $data['cellphone'] ?? '';
+        $codigoVerif = trim($data['code'] ?? '');
 
-        $registerIdentifier = 'register:' . getClientIp();
+        if (empty($correo) || !filter_var($correo, FILTER_VALIDATE_EMAIL)) {
+            echo json_encode(['success' => false, 'error' => 'Correo inválido.']);
+            break;
+        }
+        if (strlen($pass) < 6) {
+            echo json_encode(['success' => false, 'error' => 'La contraseña debe tener al menos 6 caracteres.']);
+            break;
+        }
+
+        // Rate limit por IP+correo para no bloquear redes compartidas (NAT universitario)
+        $registerIdentifier = 'register:' . getClientIp() . ':' . $correo;
         if (isRateLimited($pdo, $registerIdentifier, 10, 60)) {
             http_response_code(429);
             echo json_encode(['success' => false, 'error' => 'Demasiados intentos de registro. Intenta de nuevo más tarde.']);
@@ -877,10 +1048,23 @@ switch ($action) {
         }
         recordFailedAttempt($pdo, $registerIdentifier);
 
+        // Seguridad: la cuenta SOLO se crea con un código de verificación válido
+        // enviado al correo (send_verification_code type 'register'). Sin esto,
+        // cualquiera podría crear cuentas con correos ajenos llamando a la API.
+        $stmtCode = $pdo->prepare("SELECT id FROM password_resets WHERE email = ? AND code = ? AND type = 'user' AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+        $stmtCode->execute([$correo, $codigoVerif]);
+        $verif = $stmtCode->fetch();
+        if (empty($codigoVerif) || !$verif) {
+            echo json_encode(['success' => false, 'error' => 'Código de verificación inválido o expirado. Verifica tu correo.']);
+            break;
+        }
+
         try {
             $hashedPassword = password_hash($pass, PASSWORD_DEFAULT);
             $stmt = $pdo->prepare("INSERT INTO ini_usuarios (correo, contrasena, telefono) VALUES (?, ?, ?)");
             $stmt->execute([$correo, $hashedPassword, $tel]);
+            // Consumir el código: un código = una cuenta
+            $pdo->prepare("UPDATE password_resets SET used = 1 WHERE id = ?")->execute([$verif['id']]);
             echo json_encode(['success' => true]);
         } catch (PDOException $e) {
             // Error code 1062 or SQLSTATE 23000 indicate a unique constraint violation in MySQL
@@ -922,7 +1106,13 @@ switch ($action) {
                 ]);
             } else {
                 recordFailedAttempt($pdo, $userLoginIdentifier);
-                echo json_encode(['success' => false, 'error' => 'Credenciales incorrectas']);
+                // Mensajes diferenciados (solicitud del cliente): si el correo no
+                // existe se invita a crear cuenta; si existe, credenciales inválidas.
+                if (!$user) {
+                    echo json_encode(['success' => false, 'error' => 'Usuario no registrado. Favor de crear tu cuenta.', 'not_registered' => true]);
+                } else {
+                    echo json_encode(['success' => false, 'error' => 'Nombre de usuario y/o contraseña incorrecta']);
+                }
             }
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => 'Error: ' . $e->getMessage()]);
@@ -1148,13 +1338,15 @@ switch ($action) {
 
         // Generar código de 6 dígitos
         $codigo = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $expira = date('Y-m-d H:i:s', strtotime('+15 minutes'));
 
         // Invalidar códigos anteriores
         $pdo->prepare("UPDATE password_resets SET used = 1 WHERE email = ? AND type = ?")->execute([$correo, $tipo]);
 
-        $pdo->prepare("INSERT INTO password_resets (email, code, type, expires_at) VALUES (?, ?, ?, ?)")
-            ->execute([$correo, $codigo, $tipo, $expira]);
+        // IMPORTANTE: la expiración se calcula en SQL (NOW() + INTERVAL) y NO con
+        // date() de PHP, porque las zonas horarias de PHP y MySQL pueden diferir
+        // en este servidor y el código aparecería expirado de inmediato.
+        $pdo->prepare("INSERT INTO password_resets (email, code, type, expires_at) VALUES (?, ?, ?, NOW() + INTERVAL 15 MINUTE)")
+            ->execute([$correo, $codigo, $tipo]);
 
         // Enviar correo
         try {
@@ -1221,9 +1413,24 @@ switch ($action) {
             $hashed = password_hash($newPwd, PASSWORD_DEFAULT);
 
             if ($tipo === 'admin') {
-                $pdo->prepare("UPDATE admin_users SET password_hash = ? WHERE username = ?")->execute([$hashed, $correo]);
+                $upd = $pdo->prepare("UPDATE admin_users SET password_hash = ? WHERE username = ?");
+                $upd->execute([$hashed, $correo]);
             } else {
-                $pdo->prepare("UPDATE ini_usuarios SET contrasena = ? WHERE correo = ?")->execute([$hashed, $correo]);
+                $upd = $pdo->prepare("UPDATE ini_usuarios SET contrasena = ? WHERE correo = ?");
+                $upd->execute([$hashed, $correo]);
+            }
+
+            // Si la cuenta no existe, no quemar el código ni reportar éxito
+            if ($upd->rowCount() === 0) {
+                $existe = $pdo->prepare($tipo === 'admin'
+                    ? "SELECT 1 FROM admin_users WHERE username = ?"
+                    : "SELECT 1 FROM ini_usuarios WHERE correo = ?");
+                $existe->execute([$correo]);
+                if (!$existe->fetch()) {
+                    echo json_encode(['success' => false, 'error' => 'La cuenta no existe.']);
+                    break;
+                }
+                // rowCount 0 pero la cuenta existe = misma contraseña; continuar normal
             }
 
             // Invalidar el código usado

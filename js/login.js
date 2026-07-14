@@ -47,6 +47,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         cellphone: result.user.cellphone 
                     }));
                     window.location.href = 'registro.html';
+                } else if (result.not_registered) {
+                    // Correo sin cuenta: invitar a crear una
+                    if (confirm('Error: ' + result.error + '\n\n¿Deseas crear tu cuenta ahora?')) {
+                        window.location.href = 'crear-cuenta.html';
+                    }
                 } else {
                     alert('Error: ' + result.error);
                 }

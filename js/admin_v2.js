@@ -120,6 +120,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- DASHBOARD LOGIC ---
     if (isDashboard) {
+        // Escape de HTML para datos controlados por usuarios (nombres, correos,
+        // títulos, etc.). Evita XSS almacenado en el panel de administración.
+        const esc = (s) => String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
         // --- Global Event Delegation ---
         document.addEventListener('click', function(e) {
             let target = e.target;
@@ -163,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const codeModal = document.getElementById('codeModal');
         const openModalBtn = document.getElementById('openModalBtn');
         const downloadSvgBtn = document.getElementById('downloadSvgBtn');
+        const downloadRosterBtn = document.getElementById('downloadRosterBtn');
         const toggleActiveBtn = document.getElementById('toggleActiveBtn');
         const closeModalBtns = [
             document.getElementById('closeModalBtn'),
@@ -197,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Wrapper de fetch que agrega el token de admin y maneja sesiones expiradas (401)
+        let redirecting401 = false;
         async function adminFetch(url, options = {}) {
             const token = sessionStorage.getItem('adminToken');
             const headers = Object.assign({}, options.headers || {});
@@ -204,7 +215,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(url, Object.assign({}, options, { headers }));
             if (response.status === 401) {
                 clearAdminSession();
-                setTimeout(() => { window.location.href = 'admin-login.html'; }, 1500);
+                if (!redirecting401) {
+                    redirecting401 = true;
+                    setTimeout(() => { window.location.href = 'admin-login.html'; }, 1500);
+                }
+                // Cortar el flujo del llamador: la sesión expiró, no hay datos válidos
+                throw new Error('Sesión expirada');
             }
             return response;
         }
@@ -376,12 +392,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                     const roleLabel = adm.rol === 'superadmin' ? 'Super Admin' : 'Admin';
                                     const roleClass = adm.rol === 'superadmin' ? 'status-pill-success' : 'status-pill-warning';
                                     const recoveryBadge = adm.recovery_email
-                                        ? `<span style="font-size:0.8rem;color:#15803d;"><i class="fa-solid fa-circle-check"></i> ${adm.recovery_email}</span>`
+                                        ? `<span style="font-size:0.8rem;color:#15803d;"><i class="fa-solid fa-circle-check"></i> ${esc(adm.recovery_email)}</span>`
                                         : `<span style="font-size:0.8rem;color:#dc2626;font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> Sin registrar</span>`;
                                     return `
                                         <tr>
                                             <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
-                                                <strong style="color: #1e293b;">${adm.username}</strong>
+                                                <strong style="color: #1e293b;">${esc(adm.username)}</strong>
                                                 ${isSelf ? '<span style="font-size:0.75rem; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius:4px; font-weight:bold; margin-left: 6px;">Tú</span>' : ''}
                                             </td>
                                             <td style="padding: 12px 15px; border-bottom: 1px solid var(--border-color);">
@@ -391,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 ${recoveryBadge}
                                             </td>
                                             <td style="padding: 12px 15px; text-align: right; border-bottom: 1px solid var(--border-color);" class="actions">
-                                                <button class="btn-icon btn-edit" onclick="window.editAdmin(${adm.id}, '${adm.username}', '${adm.rol}')" title="Editar"><i class="fa-solid fa-pen"></i></button>
+                                                <button class="btn-icon btn-edit" onclick="window.editAdmin(${parseInt(adm.id, 10)})" title="Editar"><i class="fa-solid fa-pen"></i></button>
                                                 <button class="btn-icon btn-delete" onclick="window.deleteAdmin(${adm.id}, ${isSelf})" title="Eliminar"><i class="fa-solid fa-trash"></i></button>
                                             </td>
                                         </tr>
@@ -565,6 +581,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const response = await adminFetch(`php/api.php?action=get_admins&t=${Date.now()}`);
                 const result = await response.json();
                 items = result.admins || [];
+            } else if (currentType === 'code') {
+                // Endpoint admin dedicado: incluye quién usó cada código (dato
+                // sensible que NO se expone en el get_initial_data público).
+                const response = await adminFetch(`php/api.php?action=get_codes&t=${Date.now()}`);
+                const result = await response.json();
+                items = result.codes || [];
             } else {
                 items = data[currentType] || [];
             }
@@ -608,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
             if (currentType === 'code') {
-                thead.innerHTML = `<th>Código</th><th>Estado</th><th>Fecha de Creación</th><th>Acciones</th>`;
+                thead.innerHTML = `<th>Código</th><th>Estado</th><th>Usado por</th><th>Fecha de Creación</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
                 toggleActiveBtn.style.display = 'none';
             } else if (currentType === 'registrations') {
@@ -653,6 +675,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span style="font-size: 0.85rem; padding: 4px 8px; border-radius: 4px; background: ${item.usado == 1 ? '#fee2e2' : '#dcfce7'}; color: ${item.usado == 1 ? '#ef4444' : '#16a34a'}; font-weight: bold;">
                                 ${item.usado == 1 ? '<i class="fa-solid fa-xmark"></i> Ya Utilizado' : '<i class="fa-solid fa-check"></i> Disponible'}
                             </span>
+                        </td>
+                        <td>
+                            ${item.usado_por
+                                ? `<div style="font-size:0.85rem;"><strong style="color:#1e293b;">${esc(item.usado_por)}</strong>${item.usado_por_id ? `<br><span style="color:#64748b;font-size:0.78rem;">ID usuario: ${esc(item.usado_por_id)}</span>` : ''}${item.fecha_uso ? `<br><span style="color:#94a3b8;font-size:0.75rem;">${esc(item.fecha_uso)}</span>` : ''}</div>`
+                                : '<span style="color:#94a3b8;font-size:0.85rem;">—</span>'}
                         </td>
                         <td><span style="color: #64748b; font-size: 0.9rem;"><i class="fa-regular fa-calendar"></i> ${item.date || 'Reciente'}</span></td>
                         <td class="actions">
@@ -712,16 +739,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     tr.innerHTML = `
                         <td style="font-weight: 600;">
                             <span style="color: var(--primary-color); font-weight: 700; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 6px; border-radius: 6px; font-size: 0.78rem; font-family: monospace; margin-right: 8px; display: inline-block; vertical-align: middle;">ID ${conceptId}</span>
-                            <span style="vertical-align: middle;">${item.fullName || 'N/A'}</span>
+                            <span style="vertical-align: middle;">${esc(item.fullName) || 'N/A'}</span>
                         </td>
-                        <td>${item.email || 'N/A'}</td>
+                        <td>${esc(item.email) || 'N/A'}</td>
                         <td>${dotsWrapper}</td>
                         <td>${conceptHtml}</td>
                         <td>${totalHtml}</td>
                         <td>
                             <div class="actions">
                                 <button class="btn-icon btn-edit action-btn" style="background: #e0f2fe; color: #0369a1;" data-action="viewUserDetail" data-id="${item.folio}" title="Ver Detalle Completo"><i class="fa-solid fa-eye"></i></button>
-                                <button class="btn-icon btn-edit action-btn" style="background: #dcfce7; color: #15803d;" data-action="openDocReview" data-id="${item.folio}" data-name="${(item.fullName||'').replace(/"/g,'&quot;')}" title="Revisar Documentos"><i class="fa-solid fa-check"></i></button>
+                                <button class="btn-icon btn-edit action-btn" style="background: #dcfce7; color: #15803d;" data-action="openDocReview" data-id="${item.folio}" data-name="${esc(item.fullName)}" title="Revisar Documentos"><i class="fa-solid fa-check"></i></button>
                                 <button class="btn-icon btn-delete action-btn" data-action="deleteReg" data-id="${item.folio}" title="Eliminar Registro Permanente"><i class="fa-solid fa-trash"></i></button>
                             </div>
                         </td>
@@ -734,13 +761,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     tr.innerHTML = `
                         <td>
                             ${statusBadge}
-                            <strong style="display:block; margin-bottom: 4px; color: #1e293b;">${item.name}${newBadge}</strong>
-                            <small style="color: var(--primary-color); display:block;"><strong>Instructor:</strong> ${item.instructor || 'Por definir'}</small>
-                            <small style="color: #64748b; display:block;"><strong>Dependencia:</strong> ${item.dependency || 'N/A'}</small>
+                            <strong style="display:block; margin-bottom: 4px; color: #1e293b;">${esc(item.name)}${newBadge}</strong>
+                            <small style="color: var(--primary-color); display:block;"><strong>Instructor:</strong> ${esc(item.instructor) || 'Por definir'}</small>
+                            <small style="color: #64748b; display:block;"><strong>Dependencia:</strong> ${esc(item.dependency) || 'N/A'}</small>
                         </td>
                         <td style="max-width: 250px;">
                             <small style="color: #6b7280; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">
-                                ${item.description || 'Sin descripción'}
+                                ${esc(item.description) || 'Sin descripción'}
                             </small>
                         </td>
                         <td>
@@ -776,6 +803,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentType = item.dataset.type;
 
                 downloadSvgBtn.style.display = 'none';
+                if (downloadRosterBtn) downloadRosterBtn.style.display = 'none';
                 document.getElementById('searchBarWrapper').style.display = 'none';
                 document.getElementById('regSearchInput').value = '';
 
@@ -792,6 +820,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     pageDescription.textContent = 'Gestiona los registros, valida pagos y actualiza el estatus de los usuarios.';
                     openModalBtn.style.display = 'none';
                     downloadSvgBtn.style.display = 'flex';
+                    if (downloadRosterBtn) downloadRosterBtn.style.display = 'flex';
                     document.getElementById('searchBarWrapper').style.display = 'block';
                 } else if (currentType === 'admins') {
                     pageTitle.textContent = 'Gestión de Administradores';
@@ -818,11 +847,14 @@ document.addEventListener('DOMContentLoaded', () => {
             editingId = null;
             editingActivo = 1;
             itemForm.reset();
+            // El ID nunca es editable por el admin: en alta lo asigna el servidor
+            // de forma secuencial (T01, T02...) y sin reutilizar números.
             document.getElementById('itemId').disabled = false;
-            
-            // Auto-generación de ID según reglamento (T01, T02... / V01, V02...)
+            document.getElementById('itemId').readOnly = true;
+
+            // Vista previa del ID que asignará el servidor (T01, T02... / V01...)
             if (currentType === 'workshop' || currentType === 'visit') {
-                document.getElementById('itemId').placeholder = "Generando ID...";
+                document.getElementById('itemId').placeholder = "Se asignará automáticamente";
                 getData().then(data => {
                     const list = data[currentType] || [];
                     const prefix = currentType === 'workshop' ? 'T' : 'V';
@@ -1264,8 +1296,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
                         el.innerHTML = `
                             <div>
-                                <strong style="color: #1e293b; display:block;">${w.nombre}</strong>
-                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${w.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${w.instructor || 'Instructor por definir'} | <i class="fa-solid fa-laptop"></i> ${w.modalidad || 'Presencial'}</small>
+                                <strong style="color: #1e293b; display:block;">${esc(w.nombre)}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${esc(w.horario) || 'N/A'} | <i class="fa-solid fa-user"></i> ${esc(w.instructor) || 'Instructor por definir'} | <i class="fa-solid fa-laptop"></i> ${esc(w.modalidad) || 'Presencial'}</small>
                             </div>
                             <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(w.precio).toFixed(2)}</span>
                         `;
@@ -1283,8 +1315,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;';
                         el.innerHTML = `
                             <div>
-                                <strong style="color: #1e293b; display:block;">${v.nombre}</strong>
-                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${v.horario || 'N/A'} | <i class="fa-solid fa-user"></i> ${v.instructor || 'N/A'} | <i class="fa-solid fa-building"></i> ${v.modalidad || 'Presencial'}</small>
+                                <strong style="color: #1e293b; display:block;">${esc(v.nombre)}</strong>
+                                <small style="color: #64748b;"><i class="fa-solid fa-clock"></i> ${esc(v.horario) || 'N/A'} | <i class="fa-solid fa-user"></i> ${esc(v.instructor) || 'N/A'} | <i class="fa-solid fa-building"></i> ${esc(v.modalidad) || 'Presencial'}</small>
                             </div>
                             <span style="font-weight: 700; color: var(--primary-color);">$${parseFloat(v.precio).toFixed(2)}</span>
                         `;
@@ -1315,9 +1347,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         const el = document.createElement('div');
                         el.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 10px;';
                         el.innerHTML = `
-                            <span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #e0f2fe; color: #0369a1; font-weight: 700; text-transform: uppercase;">${c.tipo || 'N/A'}</span>
-                            <strong style="color: #1e293b; display:block; margin: 6px 0;">${c.titulo || 'Sin título'}</strong>
-                            <small style="color: #64748b; display:block;"><i class="fa-solid fa-graduation-cap"></i> <strong>Área:</strong> ${c.area || 'N/A'} | <i class="fa-solid fa-book"></i> <strong>Revista / Memorias:</strong> ${c.revista || 'N/A'} | <i class="fa-solid fa-laptop"></i> <strong>Modalidad:</strong> ${c.modalidad || 'N/A'}</small>
+                            <span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #e0f2fe; color: #0369a1; font-weight: 700; text-transform: uppercase;">${esc(c.tipo) || 'N/A'}</span>
+                            <strong style="color: #1e293b; display:block; margin: 6px 0;">${esc(c.titulo) || 'Sin título'}</strong>
+                            <small style="color: #64748b; display:block;"><i class="fa-solid fa-graduation-cap"></i> <strong>Área:</strong> ${esc(c.area) || 'N/A'} | <i class="fa-solid fa-book"></i> <strong>Revista / Memorias:</strong> ${esc(c.revista) || 'N/A'} | <i class="fa-solid fa-laptop"></i> <strong>Modalidad:</strong> ${esc(c.modalidad) || 'N/A'}</small>
                         `;
                         contribsList.appendChild(el);
                     });
@@ -1728,9 +1760,11 @@ document.addEventListener('DOMContentLoaded', () => {
             pageDescription.textContent = 'Administra las cuentas de administrador y sus permisos de acceso.';
             openModalBtn.style.display = 'none';
             downloadSvgBtn.style.display = 'none';
+            if (downloadRosterBtn) downloadRosterBtn.style.display = 'none';
             document.getElementById('searchBarWrapper').style.display = 'none';
         } else {
             downloadSvgBtn.style.display = 'flex';
+            if (downloadRosterBtn) downloadRosterBtn.style.display = 'flex';
             document.getElementById('searchBarWrapper').style.display = 'block';
         }
         renderItems();
@@ -1769,9 +1803,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     'Tipo de Registro', 'Monto Total',
                     'RFC', 'Razón Social', 'Domicilio Fiscal', 'CP Fiscal', 'Ciudad Fiscal', 'Estado Fiscal', 'Correo Facturación',
                     'Talleres (nombre, horario, precio)', 'Visitas Industriales (nombre, horario, precio)',
-                    'Contribuciones (Título - Tipo - Área - Modalidad - Revista)',
+                    // Contribución 1 (5 columnas)
+                    'Título 1', 'Tipo 1', 'Área 1', 'Modalidad 1', 'Revista 1',
+                    // Contribución 2 (5 columnas, aunque esté vacía)
+                    'Título 2', 'Tipo 2', 'Área 2', 'Modalidad 2', 'Revista 2',
                     'Comprobantes de Pago', 'Identificaciones', 'Constancias Fiscales'
                 ];
+
+                // Monto total acumulado (suma de todos los pagos). Si el backend no
+                // lo trae, se cae al total del folio actual.
+                const montoTotal = (item) => {
+                    if (item.total_acumulado !== null && item.total_acumulado !== undefined && item.total_acumulado !== '') {
+                        return '$' + parseFloat(item.total_acumulado).toFixed(2);
+                    }
+                    return item.total || '$0.00';
+                };
 
                 const rows = regs.map(item => {
                     let conceptId = item.concept || 'N/A';
@@ -1792,7 +1838,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         item.estado || '',
                         item.pais || '',
                         item.regType || '',
-                        item.total || '$0.00',
+                        montoTotal(item),
                         item.rfc || '',
                         item.razon_social || '',
                         item.domicilio_fiscal || '',
@@ -1802,7 +1848,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         item.correo_facturacion || '',
                         item.talleres || '',
                         item.visitas || '',
-                        item.contribuciones || '',
+                        item.contrib_titulo1 || '', item.contrib_tipo1 || '', item.contrib_area1 || '', item.contrib_modalidad1 || '', item.contrib_revista1 || '',
+                        item.contrib_titulo2 || '', item.contrib_tipo2 || '', item.contrib_area2 || '', item.contrib_modalidad2 || '', item.contrib_revista2 || '',
                         item.comprobante || '',
                         item.identificacion || '',
                         item.constancia || ''
@@ -1825,5 +1872,65 @@ document.addEventListener('DOMContentLoaded', () => {
                 downloadSvgBtn.innerHTML = '<i class="fa-solid fa-file-csv"></i> Descargar CSV';
             }
         });
+
+        // --- DESCARGA: ALUMNOS POR TALLER / VISITA ---
+        if (downloadRosterBtn) {
+            downloadRosterBtn.addEventListener('click', async () => {
+                downloadRosterBtn.disabled = true;
+                downloadRosterBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generando...';
+                try {
+                    const res = await adminFetch(`php/api.php?action=get_workshop_roster&t=${Date.now()}`);
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error || 'Error del servidor');
+                    const roster = data.roster || [];
+
+                    const esc = val => {
+                        const str = String(val ?? '');
+                        return (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r'))
+                            ? `"${str.replace(/"/g, '""')}"` : str;
+                    };
+
+                    const tipoLabel = t => (t === 'taller' ? 'Taller' : 'Visita Industrial');
+
+                    // Agrupar por ítem para poder poner un subtotal de alumnos
+                    const grupos = {};
+                    roster.forEach(r => {
+                        const k = r.tipo_item + '|' + r.item_id;
+                        (grupos[k] = grupos[k] || { info: r, alumnos: [] }).alumnos.push(r);
+                    });
+
+                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Folio', 'Concepto'];
+                    const lines = [headers.map(esc).join(',')];
+
+                    Object.values(grupos).forEach(g => {
+                        const i = g.info;
+                        g.alumnos.forEach((a, idx) => {
+                            lines.push([
+                                tipoLabel(i.tipo_item), i.item_id, i.item_nombre, i.horario || '', i.modalidad || '',
+                                i.cupo || '', g.alumnos.length, idx + 1,
+                                ((a.nombre || '') + ' ' + (a.apellido || '')).trim(), a.email || '', a.telefono || '',
+                                a.institucion || '', a.folio || '', a.concepto || ''
+                            ].map(esc).join(','));
+                        });
+                    });
+
+                    if (lines.length === 1) lines.push(['(Sin alumnos inscritos aún)'].map(esc).join(','));
+
+                    const csv = '﻿' + lines.join('\r\n');
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `concei_alumnos_por_taller_${Date.now()}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    alert('Error al generar el reporte: ' + err.message);
+                } finally {
+                    downloadRosterBtn.disabled = false;
+                    downloadRosterBtn.innerHTML = '<i class="fa-solid fa-users-viewfinder"></i> Alumnos por Taller';
+                }
+            });
+        }
     }
 });
