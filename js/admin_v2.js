@@ -1107,6 +1107,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // --- TABS CONTROL FOR DETAIL MODAL ---
         window.switchDetailTab = (tabName) => {
+            window.__activeDetailTab = tabName; // recordar pestaña activa (para refrescos)
             // Hide all tab contents
             document.querySelectorAll('.detail-tab-content').forEach(el => {
                 el.style.display = 'none';
@@ -1224,6 +1225,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const docsByFolio = {};
                     allDocs.forEach(doc => (docsByFolio[doc.folio] = docsByFolio[doc.folio] || []).push(doc));
 
+
                     const folios = [...new Set(allDocs.map(d => d.folio))].sort((a, b) => folioNum(a) - folioNum(b));
 
                     folios.forEach(folio => {
@@ -1245,6 +1247,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             let title = info.title;
                             if (num && doc.tipo_doc === 'comprobante') title = `${ordinalEs(num, 'm')} Comprobante de Pago`;
                             else if (num && doc.tipo_doc === 'constancia') title = `RFC / Constancia Fiscal (${ordinalEs(num, 'f')} Compra)`;
+                            // Concepto de pago de la compra a la que pertenece el comprobante
+                            if (doc.tipo_doc === 'comprobante' && doc.concepto_pago) {
+                                title += ` - ${doc.concepto_pago}`;
+                            }
 
                             const docEl = document.createElement('a');
                             docEl.href = `uploads/${doc.archivo}`;
@@ -1511,16 +1517,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const content = document.createElement('div');
             content.style.cssText = 'display:flex;flex-direction:column;gap:16px;';
 
-            // Cuando un mismo tipo de documento tiene varias versiones dentro de la
-            // misma subida (p.ej. una rechazada + su corrección ya subida), se unen
-            // visualmente en una sola tarjeta (un contenedor con borde compartido)
-            // y la versión rechazada se etiqueta como "Versión anterior rechazada"
-            // para que se vea que ambas versiones están relacionadas.
+            // Agrupación de versiones (original + correcciones) en una tarjeta:
+            // 1) Si el documento tiene vínculo explícito (reemplaza_id), se agrupa
+            //    por su cadena: cada PAGO conserva su propio hilo, aunque haya
+            //    compras posteriores (los comprobantes de pagos distintos ya no
+            //    se mezclan entre sí).
+            // 2) Documentos sin vínculo (datos previos a este cambio): se agrupan
+            //    consecutivos del mismo tipo SOLO cuando la versión anterior está
+            //    rechazada (rechazo → corrección). Comprobantes de compras
+            //    distintas quedan en tarjetas separadas.
+            const chainRootsSet = new Set(sortedDocs.filter(d => d.reemplaza_id).map(d => Number(d.reemplaza_id)));
             const groups = [];
+            const chainGroupByRoot = {};
             sortedDocs.forEach(doc => {
+                const isLinked = !!doc.reemplaza_id || chainRootsSet.has(Number(doc.id));
+                if (isLinked) {
+                    const root = doc.reemplaza_id ? Number(doc.reemplaza_id) : Number(doc.id);
+                    if (!chainGroupByRoot[root]) { chainGroupByRoot[root] = []; groups.push(chainGroupByRoot[root]); }
+                    chainGroupByRoot[root].push(doc);
+                    return;
+                }
                 const lastGroup = groups[groups.length - 1];
-                if (lastGroup && lastGroup[0]._spec.key === doc._spec.key) lastGroup.push(doc);
-                else groups.push([doc]);
+                const lastIsLoose = lastGroup && !lastGroup.some(d => d.reemplaza_id || chainRootsSet.has(Number(d.id)));
+                if (lastGroup && lastIsLoose && lastGroup[0]._spec.key === doc._spec.key && lastGroup[lastGroup.length - 1].estado === 'rechazado') {
+                    lastGroup.push(doc);
+                } else {
+                    groups.push([doc]);
+                }
             });
 
             groups.forEach(group => {
@@ -1533,6 +1556,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     let label = doc._spec.label;
                     if (n && doc._spec.key === 'comprobante') label = `${ordinalEs(n, 'm')} Comprobante de Pago`;
                     else if (n && doc._spec.key === 'constancia') label = `RFC / Constancia Fiscal (${ordinalEs(n, 'f')} Compra)`;
+                    // Concepto de pago de la compra a la que pertenece este comprobante
+                    // (calculado por documento en el servidor, según su fecha de subida)
+                    if (doc._spec.key === 'comprobante' && doc.concepto_pago) {
+                        label += ` - <span style="font-family:monospace;">${esc(doc.concepto_pago)}</span>`;
+                    }
 
                     const isLast = idx === total - 1;
                     if (total > 1 && !isLast && doc.estado === 'rechazado') {
@@ -1556,10 +1584,45 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             body.appendChild(content);
 
-            // El progreso (X/Y) y el botón "Confirmar Aceptación Total" consideran
-            // TODO el historial del usuario, no solo la pestaña activa.
-            const accepted = allDocs.filter(d => d.estado === 'aceptado').length;
-            updateReviewProgress(accepted, allDocs.length);
+            // El progreso (X/Y) y el botón "Confirmar Aceptación Total" cuentan por
+            // HILOS de documento (la versión vigente de cada documento/pago), no por
+            // archivos históricos: una versión rechazada que ya fue corregida y
+            // aceptada no bloquea la aceptación total.
+            const units = buildReviewUnits(allDocs);
+            const accepted = units.filter(d => d.estado === 'aceptado').length;
+            updateReviewProgress(accepted, units.length);
+        }
+
+        // Devuelve la versión VIGENTE (más reciente) de cada hilo de documento:
+        // - Con vínculo (reemplaza_id): un hilo por cadena original+correcciones.
+        // - Sin vínculo: cada documento es su propio hilo, salvo el patrón legado
+        //   rechazado→corrección consecutiva del mismo tipo, que se une.
+        function buildReviewUnits(docs) {
+            const order = { identificacion: 0, comprobante: 1, constancia: 2 };
+            const sorted = docs.slice().sort((a, b) => {
+                if (a._spec.key !== b._spec.key) return order[a._spec.key] - order[b._spec.key];
+                return new Date(a.fecha_subida) - new Date(b.fecha_subida);
+            });
+            const chainRootsSet = new Set(sorted.filter(d => d.reemplaza_id).map(d => Number(d.reemplaza_id)));
+            const groups = [];
+            const byRoot = {};
+            sorted.forEach(doc => {
+                const linked = !!doc.reemplaza_id || chainRootsSet.has(Number(doc.id));
+                if (linked) {
+                    const root = doc.reemplaza_id ? Number(doc.reemplaza_id) : Number(doc.id);
+                    if (!byRoot[root]) { byRoot[root] = []; groups.push(byRoot[root]); }
+                    byRoot[root].push(doc);
+                    return;
+                }
+                const last = groups[groups.length - 1];
+                const lastLoose = last && !last.some(d => d.reemplaza_id || chainRootsSet.has(Number(d.id)));
+                if (last && lastLoose && last[0]._spec.key === doc._spec.key && last[last.length - 1].estado === 'rechazado') {
+                    last.push(doc);
+                } else {
+                    groups.push([doc]);
+                }
+            });
+            return groups.map(g => g[g.length - 1]);
         }
 
         // Genera la barra de acciones (Aceptar / Rechazar / Pendiente) para UN archivo
@@ -1578,17 +1641,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     <i class="fa-solid ${icon}"></i> ${label}
                 </button>`;
 
+            // Nombre corto del archivo para las ventanas de confirmación (los nombres
+            // se sanean en el servidor, no contienen comillas)
+            const fname = (doc.archivo || '').replace(/^\d+_[^_]+_/, '');
+
             return `
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                    ${btn('Aceptar', 'fa-check', isAceptado, '#15803d', '#dcfce7', `window.submitDocReview(${doc.id},'aceptado','')`)}
+                    ${btn('Aceptar', 'fa-check', isAceptado, '#15803d', '#dcfce7', `window.confirmDocReview(${doc.id},'aceptado','${fname}','${doc.estado}')`)}
                     ${btn('Rechazar', 'fa-xmark', isRechazado, '#b91c1c', '#fee2e2', `window.toggleRejectForm('${key}')`, `id="btn-rechazar-${key}"`)}
-                    ${btn('Pendiente', 'fa-clock', isPendiente, '#92400e', '#fef9c3', `window.submitDocReview(${doc.id},'pendiente',null)`)}
+                    ${btn('Pendiente', 'fa-clock', isPendiente, '#92400e', '#fef9c3', `window.confirmDocReview(${doc.id},'pendiente','${fname}','${doc.estado}')`)}
                 </div>
-                ${locked ? `<div style="margin-top:6px;font-size:0.8rem;color:#92400e;background:#fef9c3;padding:6px 10px;border-radius:6px;"><i class="fa-solid fa-lock"></i> Conectado con la versión más reciente. Para modificar este documento, primero cambia esa versión a "Pendiente".</div>` : ''}
-                ${isRechazado ? `<div style="margin-top:6px;font-size:0.8rem;color:#b91c1c;"><i class="fa-solid fa-comment-dots"></i> <strong>Motivo:</strong> ${doc.comentario || 'Sin motivo especificado'}</div>` : ''}
+                ${locked ? `<div style="margin-top:6px;font-size:0.8rem;color:#92400e;background:#fef9c3;padding:6px 10px;border-radius:6px;"><i class="fa-solid fa-lock"></i> Este documento ya tiene una versión más reciente que ya fue revisada. Si necesitas modificar esta versión anterior, primero regresa la versión más reciente a "Pendiente".</div>` : ''}
+                ${isRechazado ? `<div style="margin-top:6px;font-size:0.8rem;color:#b91c1c;"><i class="fa-solid fa-comment-dots"></i> <strong>Motivo:</strong> ${esc(doc.comentario) || 'Sin motivo especificado'}</div>` : ''}
                 <div id="reject-form-${key}" style="display:none;margin-top:8px;">
                     <textarea id="reject-comment-${key}" placeholder="Motivo del rechazo (opcional)..."
-                        style="width:100%;padding:8px;border:1px solid #fca5a5;border-radius:8px;font-size:0.85rem;resize:vertical;min-height:60px;box-sizing:border-box;font-family:inherit;display:block;"></textarea>
+                        style="width:100%;padding:8px;border:1px solid #fca5a5;border-radius:8px;font-size:0.85rem;resize:vertical;min-height:60px;box-sizing:border-box;font-family:inherit;display:block;">${esc(doc.comentario || '')}</textarea>
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
                         <button onclick="window.toggleRejectForm('${key}')"
                             style="padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;background:white;color:#64748b;font-weight:600;cursor:pointer;font-size:0.8rem;">
@@ -1664,10 +1731,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.disabled = false;
                 btn.style.opacity = '1';
                 btn.style.cursor = 'pointer';
+                btn.title = 'Marca el registro completo como Aceptado.';
             } else {
                 btn.disabled = true;
                 btn.style.opacity = '0.5';
                 btn.style.cursor = 'not-allowed';
+                // Explicación de por qué está deshabilitado (J6)
+                btn.title = `Se habilita cuando la versión vigente de TODOS los documentos está aceptada (van ${accepted} de ${total}).`;
             }
         }
 
@@ -1679,6 +1749,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 const ta = document.getElementById(`reject-comment-${key}`);
                 if (ta) ta.focus();
             }
+        };
+
+        // Confirmación antes de Aceptar / Pendiente (J1). Si el documento estaba
+        // previamente RECHAZADO, la confirmación es reforzada (J2) para evitar
+        // aceptaciones por equivocación de botón.
+        window.confirmDocReview = (id, estado, archivo, prevEstado) => {
+            let msg;
+            if (estado === 'aceptado') {
+                msg = prevEstado === 'rechazado'
+                    ? `⚠️ ATENCIÓN: este documento fue RECHAZADO previamente.\n\n¿Está seguro de que desea ACEPTAR el documento "${archivo}"?`
+                    : `¿Está seguro de que desea aceptar el documento "${archivo}"?`;
+            } else if (estado === 'pendiente') {
+                msg = prevEstado === 'rechazado'
+                    ? `Este documento está RECHAZADO.\n\n¿Está seguro de que desea regresarlo a Pendiente? (El motivo de rechazo se conservará)`
+                    : `¿Está seguro de que desea marcar como Pendiente el documento "${archivo}"?`;
+            }
+            if (msg && !window.confirm(msg)) return;
+            // Aceptar/Pendiente no envían comentario: el motivo de rechazo previo
+            // se CONSERVA en el servidor (por si hay que volver a rechazar).
+            window.submitDocReview(id, estado, null);
         };
 
         window.submitDocReview = async (id, estado, comentario) => {
@@ -1698,6 +1788,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 reviewDocsData = data2.documents || {};
                 renderDocReview();
                 renderItems(); // refresh main table status
+
+                // Si la ventana "Documentos y Pago" (detalle/ojito) está abierta,
+                // refrescarla de inmediato para que el estatus del documento se
+                // actualice sin tener que cerrarla y reabrirla.
+                const detailModal = document.getElementById('userDetailModal');
+                if (detailModal && detailModal.style.display && detailModal.style.display !== 'none') {
+                    const keepTab = window.__activeDetailTab || 'personal';
+                    await window.viewUserDetail(reviewFolio);
+                    window.switchDetailTab(keepTab);
+                }
             } catch (err) {
                 alert('Error al guardar revisión: ' + err.message);
             }
@@ -1899,7 +1999,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         (grupos[k] = grupos[k] || { info: r, alumnos: [] }).alumnos.push(r);
                     });
 
-                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Folio', 'Concepto'];
+                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Folio'];
                     const lines = [headers.map(esc).join(',')];
 
                     Object.values(grupos).forEach(g => {
@@ -1909,7 +2009,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 tipoLabel(i.tipo_item), i.item_id, i.item_nombre, i.horario || '', i.modalidad || '',
                                 i.cupo || '', g.alumnos.length, idx + 1,
                                 ((a.nombre || '') + ' ' + (a.apellido || '')).trim(), a.email || '', a.telefono || '',
-                                a.institucion || '', a.folio || '', a.concepto || ''
+                                a.institucion || '', a.folio || ''
                             ].map(esc).join(','));
                         });
                     });

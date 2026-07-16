@@ -181,6 +181,12 @@
             background: white;
             margin: 5% auto;
             width: 500px;
+            max-width: 92vw;
+            /* No exceder la altura de la ventana: así el pie con "Guardar Cambios"
+               siempre queda visible aunque el formulario sea largo. */
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
             border-radius: 15px;
             box-shadow: var(--shadow-lg);
             overflow: hidden;
@@ -194,10 +200,14 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-shrink: 0;
         }
 
         .modal-body {
             padding: 30px;
+            /* El cuerpo hace scroll si el contenido es largo; el pie queda fijo. */
+            overflow-y: auto;
+            flex: 1 1 auto;
         }
 
         .modal-footer {
@@ -206,6 +216,8 @@
             display: flex;
             justify-content: flex-end;
             gap: 15px;
+            flex-shrink: 0;
+            background: white;
         }
 
         .btn-cancel {
@@ -699,7 +711,7 @@
         </div>
     </div>
 
-    <script src="js/admin_v2.js?v=27"></script>
+    <script src="js/admin_v2.js?v=28"></script>
 </body>
 
 </html>

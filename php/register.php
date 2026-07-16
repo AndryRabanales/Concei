@@ -324,36 +324,52 @@ try {
 
         // Para primera compra: todos los items
         // Para actualización: solo los items NUEVOS (no estaban antes)
-        $talleresRows = '';
+        // Se recolectan primero para aplicar el descuento de "taller gratis":
+        // en la PRIMERA compra (general/externo/código), el ítem con costo más
+        // barato se muestra en $0.00, igual que en la pantalla y el total real.
+        $mailItems = [];
         if (!empty($workshops)) {
             foreach ($workshops as $w_id) {
                 if ($esActualizacion && in_array($w_id, $prevWorkshopIds)) continue; // ya lo tenía
                 $stmtTW = $pdo->prepare("SELECT nombre, precio FROM cat_talleres WHERE id = ?");
                 $stmtTW->execute([$w_id]);
                 $tw = $stmtTW->fetch();
-                if ($tw) {
-                    $talleresRows .= "<tr>
-                        <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0;'>Taller: {$tw['nombre']}</td>
-                        <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align:right;'>\${$tw['precio']}</td>
-                    </tr>";
-                }
+                if ($tw) $mailItems[] = ['grupo' => 'taller', 'etiqueta' => 'Taller', 'nombre' => $tw['nombre'], 'precio' => (float)$tw['precio']];
             }
         }
-
-        $visitasRows = '';
         if (!empty($visits)) {
             foreach ($visits as $v_id) {
                 if ($esActualizacion && in_array($v_id, $prevVisitIds)) continue; // ya la tenía
                 $stmtVV = $pdo->prepare("SELECT nombre, precio FROM cat_visitas WHERE id = ?");
                 $stmtVV->execute([$v_id]);
                 $vv = $stmtVV->fetch();
-                if ($vv) {
-                    $visitasRows .= "<tr>
-                        <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0;'>Visita Industrial: {$vv['nombre']}</td>
-                        <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align:right;'>\${$vv['precio']}</td>
-                    </tr>";
+                if ($vv) $mailItems[] = ['grupo' => 'visita', 'etiqueta' => 'Visita Industrial', 'nombre' => $vv['nombre'], 'precio' => (float)$vv['precio']];
+            }
+        }
+
+        // Descuento "taller gratis": misma regla que el total del servidor.
+        if (!$esActualizacion && in_array($tipo, ['general', 'student_external', 'code_access'], true)) {
+            $cheapestIdx = null;
+            foreach ($mailItems as $idx => $mi) {
+                if ($mi['precio'] > 0 && ($cheapestIdx === null || $mi['precio'] < $mailItems[$cheapestIdx]['precio'])) {
+                    $cheapestIdx = $idx;
                 }
             }
+            if ($cheapestIdx !== null) {
+                $mailItems[$cheapestIdx]['precio'] = 0.0;
+                $mailItems[$cheapestIdx]['nombre'] .= ' (incluido sin costo)';
+            }
+        }
+
+        $talleresRows = '';
+        $visitasRows = '';
+        foreach ($mailItems as $mi) {
+            $rowHtml = "<tr>
+                <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0;'>{$mi['etiqueta']}: {$mi['nombre']}</td>
+                <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align:right;'>\$" . number_format($mi['precio'], 2, '.', '') . "</td>
+            </tr>";
+            if ($mi['grupo'] === 'taller') $talleresRows .= $rowHtml;
+            else $visitasRows .= $rowHtml;
         }
 
         // Contribuciones del autor

@@ -22,16 +22,35 @@ function recalcEstatusDocumentos($pdo, $correo) {
         return $cur['estatus'];
     }
 
-    // Solo se considera la subida MÁS RECIENTE de cada tipo de documento.
-    // Si un documento fue rechazado y luego se volvió a subir y aceptar,
-    // la subida anterior (rechazada) ya no debe contar para el estatus general.
-    $stmt = $pdo->prepare("
-        SELECT estado FROM reg_documentos d
-        WHERE correo = ?
-        AND id = (SELECT MAX(id) FROM reg_documentos d2 WHERE d2.correo = d.correo AND d2.tipo_doc = d.tipo_doc)
-    ");
-    $stmt->execute([$correo]);
-    $estados = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    // Se evalúa la versión MÁS RECIENTE de cada "hilo" de documento:
+    // - Documentos con correcciones vinculadas (reemplaza_id): cada cadena
+    //   original+correcciones cuenta por separado (cada pago es independiente,
+    //   un pago rechazado no queda tapado por el comprobante de otro pago).
+    // - Documentos sueltos (sin vínculo, incluye datos anteriores a este cambio):
+    //   solo cuenta el más reciente de cada tipo, como antes.
+    $stmtAll = $pdo->prepare("SELECT id, tipo_doc, estado, reemplaza_id FROM reg_documentos WHERE correo = ? ORDER BY fecha_subida ASC, id ASC");
+    $stmtAll->execute([$correo]);
+    $docs = $stmtAll->fetchAll(PDO::FETCH_ASSOC);
+
+    $linkedRoots = [];
+    foreach ($docs as $d) {
+        if (!empty($d['reemplaza_id'])) $linkedRoots[(int)$d['reemplaza_id']] = true;
+    }
+
+    $estados = [];
+    $chainLatest = [];   // raíz => estado de la versión más nueva de la cadena
+    $looseLatest = [];   // tipo  => estado del doc suelto más nuevo
+    foreach ($docs as $d) {
+        $id = (int)$d['id'];
+        $root = !empty($d['reemplaza_id']) ? (int)$d['reemplaza_id'] : $id;
+        $enCadena = !empty($d['reemplaza_id']) || isset($linkedRoots[$id]);
+        if ($enCadena) {
+            $chainLatest[$root] = $d['estado']; // orden ASC: la última asignación es la más nueva
+        } else {
+            $looseLatest[$d['tipo_doc']] = $d['estado'];
+        }
+    }
+    $estados = array_merge(array_values($chainLatest), array_values($looseLatest));
 
     $hasDocs = count($estados) > 0;
     $allAccepted = $hasDocs;
@@ -406,7 +425,17 @@ switch ($action) {
             }
 
             // Historial completo de documentos del usuario (todas sus subidas, sin importar el folio)
-            $stmtDocs = $pdo->prepare("SELECT id, folio, tipo_doc, archivo, fecha_subida, estado, comentario, revisado_por, fecha_revision FROM reg_documentos WHERE correo = ? ORDER BY tipo_doc ASC, fecha_subida DESC");
+            // concepto_pago: concepto de la compra a la que pertenece cada documento
+            $stmtDocs = $pdo->prepare("
+                SELECT d.id, d.folio, d.tipo_doc, d.archivo, d.fecha_subida, d.estado, d.comentario, d.revisado_por, d.fecha_revision, d.reemplaza_id,
+                    COALESCE(
+                        (SELECT h.concepto FROM reg_conceptos_historial h
+                          WHERE h.correo = d.correo AND h.fecha_generado <= (SELECT r0.fecha_subida FROM reg_documentos r0 WHERE r0.id = COALESCE(d.reemplaza_id, d.id))
+                          ORDER BY h.fecha_generado DESC LIMIT 1),
+                        (SELECT h2.concepto FROM reg_conceptos_historial h2
+                          WHERE h2.correo = d.correo ORDER BY h2.fecha_generado ASC LIMIT 1)
+                    ) AS concepto_pago
+                FROM reg_documentos d WHERE d.correo = ? ORDER BY d.tipo_doc ASC, d.fecha_subida DESC");
             $stmtDocs->execute([$mainData['email']]);
             $documents = $stmtDocs->fetchAll(PDO::FETCH_ASSOC);
 
@@ -776,12 +805,25 @@ switch ($action) {
             $correo = $stmtCorreo->fetchColumn();
             if (!$correo) { echo json_encode(['success' => false, 'error' => 'Folio no encontrado']); break; }
 
-            $stmtDocs = $pdo->prepare("SELECT * FROM reg_documentos WHERE correo = ? ORDER BY tipo_doc ASC, fecha_subida DESC");
+            // concepto_pago: el concepto generado inmediatamente ANTES de la subida
+            // del documento (la compra a la que pertenece). Se calcula por documento
+            // y no por folio, porque el folio ahora es estable entre compras.
+            $stmtDocs = $pdo->prepare("
+                SELECT d.*,
+                    COALESCE(
+                        (SELECT h.concepto FROM reg_conceptos_historial h
+                          WHERE h.correo = d.correo AND h.fecha_generado <= (SELECT r0.fecha_subida FROM reg_documentos r0 WHERE r0.id = COALESCE(d.reemplaza_id, d.id))
+                          ORDER BY h.fecha_generado DESC LIMIT 1),
+                        (SELECT h2.concepto FROM reg_conceptos_historial h2
+                          WHERE h2.correo = d.correo ORDER BY h2.fecha_generado ASC LIMIT 1)
+                    ) AS concepto_pago
+                FROM reg_documentos d WHERE d.correo = ? ORDER BY d.tipo_doc ASC, d.fecha_subida DESC");
             $stmtDocs->execute([$correo]);
             $grouped = [];
             foreach ($stmtDocs->fetchAll(PDO::FETCH_ASSOC) as $doc) {
                 $grouped[$doc['tipo_doc']][] = $doc;
             }
+
             echo json_encode(['success' => true, 'documents' => $grouped]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -810,7 +852,10 @@ switch ($action) {
             $prevStatus = $stmtPrev->fetchColumn();
 
             $fechaRevision = ($estado === 'pendiente') ? null : date('Y-m-d H:i:s');
-            $pdo->prepare("UPDATE reg_documentos SET estado=?, comentario=?, revisado_por=?, fecha_revision=? WHERE id=?")
+            // COALESCE: si no llega comentario nuevo (aceptar/pendiente), se CONSERVA
+            // la justificación de rechazo previa, para no perderla si el admin se
+            // equivoca de botón y luego vuelve a rechazar.
+            $pdo->prepare("UPDATE reg_documentos SET estado=?, comentario=COALESCE(?, comentario), revisado_por=?, fecha_revision=? WHERE id=?")
                 ->execute([$estado, $comentario, $revisado_por, $fechaRevision, $id]);
 
             // La revisión de un documento es una acción explícita del admin:
@@ -818,9 +863,9 @@ switch ($action) {
             resetEstatusManual($pdo, $correo);
             $newStatus = recalcEstatusDocumentos($pdo, $correo);
 
-            // Notificar por correo cuando el estatus general cambia a "aceptado"
-            // (todos los documentos aprobados) o "denegado" (al menos uno rechazado).
-            if ($newStatus !== $prevStatus && ($newStatus === 'aceptado' || $newStatus === 'denegado')) {
+            // Notificar por correo SOLO cuando se rechaza (estatus "denegado").
+            // Al aceptar no se envía correo (solicitud del 15 de julio).
+            if ($newStatus !== $prevStatus && $newStatus === 'denegado') {
                 try {
                     $stmtPersonal = $pdo->prepare("
                         SELECT p.nombre, p.apellido, i.folio
@@ -836,18 +881,13 @@ switch ($action) {
 
                     require_once 'mailer.php';
 
-                    if ($newStatus === 'aceptado') {
-                        $emailSubject = "Documentos Aprobados - ConCEI 2026 — Folio $folioPersonal";
-                        $statusBanner = "<div style='background:#dcfce7; border-left:4px solid #16a34a; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#14532d;'><strong>¡Tus documentos han sido aprobados!</strong> Tu registro al 3er Congreso de Ciencias Exactas e Ingeniería &mdash; ConCEI 2026 ha quedado confirmado.</div>";
-                    } else {
-                        $emailSubject = "Documentos Rechazados - ConCEI 2026 — Folio $folioPersonal";
-                        $statusBanner = "<div style='background:#fee2e2; border-left:4px solid #dc2626; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#7f1d1d;'><strong>Uno o más de tus documentos fueron rechazados.</strong> Por favor, ingresa nuevamente a la plataforma con tu correo y contraseña para revisar el motivo y volver a subir el documento correspondiente.</div>";
-                    }
+                    $emailSubject = "Documentos Rechazados - ConCEI-3 — Folio $folioPersonal";
+                    $statusBanner = "<div style='background:#fee2e2; border-left:4px solid #dc2626; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#7f1d1d;'><strong>Uno o más de tus documentos fueron rechazados.</strong> Por favor, ingresa nuevamente a la plataforma con tu correo y contraseña para revisar el motivo y volver a subir el documento correspondiente.</div>";
 
                     $emailBody = "
                     <div style='font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;'>
                         <div style='background: #1e3a8a; color: white; padding: 28px 30px;'>
-                            <h1 style='margin: 0 0 6px; font-size: 22px;'>Congreso ConCEI 2026</h1>
+                            <h1 style='margin: 0 0 6px; font-size: 22px;'>Congreso ConCEI-3</h1>
                             <p style='margin: 0; font-size: 14px; opacity: 0.85;'>Estatus de Documentos</p>
                         </div>
                         <div style='padding: 30px; color: #334155; line-height: 1.7;'>
@@ -905,7 +945,18 @@ switch ($action) {
             $folio = $regInfo['folio'];
 
             // Historial completo de documentos del usuario (todas sus subidas, sin importar el folio)
-            $stmtDocs = $pdo->prepare("SELECT id, folio, tipo_doc, archivo, fecha_subida, estado, comentario, fecha_revision FROM reg_documentos WHERE correo = ? ORDER BY tipo_doc ASC, fecha_subida DESC");
+            // concepto_pago: concepto de la compra a la que pertenece cada documento
+            // (el generado justo antes de su subida), calculado por documento.
+            $stmtDocs = $pdo->prepare("
+                SELECT d.id, d.folio, d.tipo_doc, d.archivo, d.fecha_subida, d.estado, d.comentario, d.fecha_revision, d.reemplaza_id,
+                    COALESCE(
+                        (SELECT h.concepto FROM reg_conceptos_historial h
+                          WHERE h.correo = d.correo AND h.fecha_generado <= (SELECT r0.fecha_subida FROM reg_documentos r0 WHERE r0.id = COALESCE(d.reemplaza_id, d.id))
+                          ORDER BY h.fecha_generado DESC LIMIT 1),
+                        (SELECT h2.concepto FROM reg_conceptos_historial h2
+                          WHERE h2.correo = d.correo ORDER BY h2.fecha_generado ASC LIMIT 1)
+                    ) AS concepto_pago
+                FROM reg_documentos d WHERE d.correo = ? ORDER BY d.tipo_doc ASC, d.fecha_subida DESC");
             $stmtDocs->execute([$email]);
             $grouped = [];
             foreach ($stmtDocs->fetchAll(PDO::FETCH_ASSOC) as $doc) {
@@ -945,6 +996,10 @@ switch ($action) {
     case 'reupload_doc':
         $folio    = $_POST['folio']    ?? '';
         $tipo_doc = $_POST['tipo_doc'] ?? '';
+        // ID del documento rechazado que esta subida corrige (opcional). Ancla la
+        // corrección a SU pago específico, para que el hilo comprobante+corrección
+        // de cada compra sea independiente y no se pierda al hacer otra compra.
+        $reemplazaId = (int)($_POST['reemplaza_id'] ?? 0);
         $validTypes = ['comprobante','identificacion','constancia'];
         if (empty($folio) || !in_array($tipo_doc, $validTypes) || empty($_FILES['documento'])) {
             echo json_encode(['success' => false, 'error' => 'Datos incompletos']); break;
@@ -970,13 +1025,38 @@ switch ($action) {
             $stmtCurrentFolio->execute([$correo]);
             $currentFolio = $stmtCurrentFolio->fetchColumn() ?: $folio;
 
-            // Solo se permite volver a subir si el documento más reciente de este tipo
-            // fue rechazado (o si aún no se ha subido ninguno de este tipo).
-            $stmtLatest = $pdo->prepare("SELECT estado FROM reg_documentos WHERE correo = ? AND tipo_doc = ? ORDER BY fecha_subida DESC LIMIT 1");
-            $stmtLatest->execute([$correo, $tipo_doc]);
-            $latestEstado = $stmtLatest->fetchColumn();
-            if ($latestEstado !== false && $latestEstado !== 'rechazado') {
-                echo json_encode(['success' => false, 'error' => 'Este documento ya fue revisado y no puede modificarse.']); break;
+            $rootId = null;
+            if ($reemplazaId > 0) {
+                // CORRECCIÓN de un documento específico: validar que el documento
+                // exista, sea de este usuario/tipo, esté RECHAZADO y no tenga ya
+                // una corrección propia sin resolver.
+                $stmtRoot = $pdo->prepare("SELECT id, folio, reemplaza_id FROM reg_documentos WHERE id = ? AND correo = ? AND tipo_doc = ?");
+                $stmtRoot->execute([$reemplazaId, $correo, $tipo_doc]);
+                $rootDoc = $stmtRoot->fetch();
+                if (!$rootDoc) { echo json_encode(['success' => false, 'error' => 'Documento a corregir no encontrado.']); break; }
+                // Siempre anclar a la RAÍZ de la cadena (si corrigen una corrección)
+                $rootId = $rootDoc['reemplaza_id'] ?: $rootDoc['id'];
+
+                // La versión más reciente de esta cadena debe estar rechazada
+                $stmtLast = $pdo->prepare("
+                    SELECT estado FROM reg_documentos
+                    WHERE correo = ? AND (id = ? OR reemplaza_id = ?)
+                    ORDER BY fecha_subida DESC, id DESC LIMIT 1");
+                $stmtLast->execute([$correo, $rootId, $rootId]);
+                if ($stmtLast->fetchColumn() !== 'rechazado') {
+                    echo json_encode(['success' => false, 'error' => 'Este documento no tiene una versión rechazada pendiente de corregir.']); break;
+                }
+                // La corrección conserva el folio del documento original (su pago)
+                $currentFolio = $rootDoc['folio'];
+            } else {
+                // Subida "suelta" (sin corrección dirigida): se permite solo si el
+                // documento más reciente de este tipo fue rechazado o no existe.
+                $stmtLatest = $pdo->prepare("SELECT estado FROM reg_documentos WHERE correo = ? AND tipo_doc = ? ORDER BY fecha_subida DESC LIMIT 1");
+                $stmtLatest->execute([$correo, $tipo_doc]);
+                $latestEstado = $stmtLatest->fetchColumn();
+                if ($latestEstado !== false && $latestEstado !== 'rechazado') {
+                    echo json_encode(['success' => false, 'error' => 'Este documento ya fue revisado y no puede modificarse.']); break;
+                }
             }
 
             $safeOriginal = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($file['name']));
@@ -986,9 +1066,9 @@ switch ($action) {
                 echo json_encode(['success' => false, 'error' => 'No se pudo guardar el archivo']); break;
             }
 
-            // Cada subida es un registro NUEVO en el historial, asociado al folio actual.
-            $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado) VALUES (?,?,?,?,NOW(),'pendiente')")
-                ->execute([$correo, $currentFolio, $tipo_doc, $filename]);
+            // Cada subida es un registro NUEVO en el historial (append-only).
+            $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado, reemplaza_id) VALUES (?,?,?,?,NOW(),'pendiente',?)")
+                ->execute([$correo, $currentFolio, $tipo_doc, $filename, $rootId]);
             // Documento nuevo = nueva evidencia: quitar candado manual y recalcular
             resetEstatusManual($pdo, $correo);
             $newStatus = recalcEstatusDocumentos($pdo, $correo);

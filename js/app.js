@@ -337,15 +337,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     grid.appendChild(empty);
                 }
 
+                // Todos los documentos del usuario (todas las pestañas), para poder
+                // determinar si un documento rechazado ya tiene corrección subida.
+                const everyDoc = [];
+                DOC_SPECS_USER.forEach(s2 => (docs[s2.key] || []).forEach(d => everyDoc.push(d)));
+                const rootOf = d => d.reemplaza_id || d.id;
+                // Un doc rechazado se puede corregir si NINGÚN documento posterior
+                // pertenece a su misma cadena (id raíz).
+                const tieneCorreccion = d => everyDoc.some(o => o.id !== d.id && (o.reemplaza_id || 0) == rootOf(d) && new Date(o.fecha_subida) >= new Date(d.fecha_subida));
+
                 sectionSpecs.forEach(spec => {
                     const entries = active.docs.filter(d => d._type === spec.key);
                     const inputId = `reupload_${active.folio}_${spec.key}`;
 
-                    // Solo se puede subir si aún no hay ningún documento de este tipo en esta subida,
-                    // o si el más reciente fue rechazado (para corregirlo). Si está
-                    // pendiente o aceptado, queda bloqueado y solo se muestra el estatus.
+                    // El botón general del encabezado solo aplica para la PRIMERA
+                    // subida de este tipo. Las correcciones de documentos rechazados
+                    // tienen su propio botón en la fila de cada documento, anclado a
+                    // ese pago específico (no se pierden al hacer otra compra).
                     const latest = entries[0];
-                    const canUpload = !latest || latest.estado === 'rechazado';
+                    const canUpload = !latest;
                     const uploadFolio = active.folio;
 
                     const group = document.createElement('div');
@@ -358,12 +368,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         entriesHtml = entries.map(d => {
                             const st = statusCfg[d.estado] || statusCfg.pendiente;
                             const shortName = d.archivo.replace(/^\d+_[^_]+_/, '');
+                            // Concepto de pago de la compra a la que pertenece este
+                            // comprobante, para que el usuario identifique cada pago.
+                            const conceptoDoc = spec.key === 'comprobante'
+                                ? (d.concepto_pago || (docData.conceptosByFolio || {})[d.folio]?.concepto || '')
+                                : '';
                             return `
                                 <div style="padding:10px 16px;border-top:1px solid #f1f5f9;background:${st.bg};">
                                     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                                         <div style="flex-grow:1;min-width:0;">
                                             <p style="margin:0;font-size:0.85rem;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.archivo}">${shortName}</p>
                                             <p style="margin:2px 0 0;font-size:0.72rem;color:#94a3b8;">Subido: ${formatFecha(d.fecha_subida)}</p>
+                                            ${conceptoDoc ? `<p style="margin:2px 0 0;font-size:0.72rem;color:#0c4a6e;"><strong>Concepto de Pago:</strong> <span style="font-family:monospace;font-weight:700;">${conceptoDoc}</span></p>` : ''}
                                         </div>
                                         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
                                             <span style="font-weight:700;font-size:0.78rem;color:${st.color};padding:3px 10px;border-radius:12px;background:white;border:1px solid ${st.border};">
@@ -373,6 +389,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                                style="width:30px;height:30px;border-radius:6px;background:white;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:center;color:#475569;text-decoration:none;font-size:0.8rem;">
                                                 👁
                                             </a>
+                                            ${d.estado === 'rechazado' && !tieneCorreccion(d) ? `
+                                            <label title="Subir la corrección de este documento" style="display:inline-flex;align-items:center;gap:5px;padding:6px 10px;background:#b91c1c;color:white;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.72rem;">
+                                                📎 Subir corrección
+                                                <input type="file" class="fix-doc-input" accept="image/*,application/pdf" style="display:none;"
+                                                       data-folio="${d.folio}" data-tipo="${spec.key}" data-replaces="${rootOf(d)}" data-status-target="upload-status-${active.folio}_${spec.key}">
+                                            </label>` : ''}
                                         </div>
                                     </div>
                                     ${d.comentario ? `<p style="margin:6px 0 0;font-size:0.78rem;color:${st.color};"><strong>Motivo:</strong> ${d.comentario}</p>` : ''}
@@ -433,6 +455,35 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         } catch (err) {
                             statusEl.textContent = '❌ Error de conexión.';
+                        }
+                    });
+                });
+
+                // Bind de los botones "Subir corrección" por documento rechazado.
+                // La corrección queda anclada al documento (pago) que corrige.
+                panel.querySelectorAll('.fix-doc-input').forEach(input => {
+                    input.addEventListener('change', async () => {
+                        if (!input.files.length) return;
+                        const statusEl = document.getElementById(input.dataset.statusTarget);
+                        if (statusEl) { statusEl.textContent = 'Subiendo corrección...'; statusEl.style.padding = '8px 16px'; }
+
+                        const fd = new FormData();
+                        fd.append('folio', input.dataset.folio);
+                        fd.append('tipo_doc', input.dataset.tipo);
+                        fd.append('reemplaza_id', input.dataset.replaces);
+                        fd.append('documento', input.files[0]);
+
+                        try {
+                            const r = await fetch('php/api.php?action=reupload_doc', { method: 'POST', body: fd });
+                            const result = await r.json();
+                            if (result.success) {
+                                if (statusEl) statusEl.textContent = '✅ Corrección subida. Actualizando...';
+                                setTimeout(() => loadAndRenderDocPanel(), 1200);
+                            } else if (statusEl) {
+                                statusEl.textContent = '❌ Error: ' + result.error;
+                            }
+                        } catch (err) {
+                            if (statusEl) statusEl.textContent = '❌ Error de conexión.';
                         }
                     });
                 });
