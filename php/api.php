@@ -363,6 +363,50 @@ switch ($action) {
                 ORDER BY cat.tipo_item, CAST(REGEXP_REPLACE(cat.id, '[^0-9]', '') AS UNSIGNED), cat.id, p.apellido, p.nombre
             ";
             $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+            // Columna "Pago" (obs. 23-jul): estatus del comprobante de la COMPRA que
+            // incluyó ese taller/visita. Se liga por concepto: cada concepto de pago
+            // contiene el ID del ítem (p.ej. 0001T03 incluye T03). Se busca el concepto
+            // del alumno que contiene el ID del ítem y el estatus de su comprobante;
+            // si no hay match, se usa el estatus del comprobante más reciente.
+            // Se hacen consultas por correo y se cachean para no repetir.
+            $comprobantesPorCorreo = [];
+            $getComprobantes = function($correo) use ($pdo, &$comprobantesPorCorreo) {
+                if (isset($comprobantesPorCorreo[$correo])) return $comprobantesPorCorreo[$correo];
+                $st = $pdo->prepare("
+                    SELECT d.estado, d.fecha_subida,
+                        COALESCE(
+                            (SELECT h.concepto FROM reg_conceptos_historial h
+                              WHERE h.correo = d.correo AND h.fecha_generado <= (SELECT r0.fecha_subida FROM reg_documentos r0 WHERE r0.id = COALESCE(d.reemplaza_id, d.id))
+                              ORDER BY h.fecha_generado DESC LIMIT 1),
+                            (SELECT h2.concepto FROM reg_conceptos_historial h2 WHERE h2.correo = d.correo ORDER BY h2.fecha_generado ASC LIMIT 1)
+                        ) AS concepto_pago
+                    FROM reg_documentos d
+                    WHERE d.correo = ? AND d.tipo_doc = 'comprobante'
+                    ORDER BY d.fecha_subida ASC");
+                $st->execute([$correo]);
+                return $comprobantesPorCorreo[$correo] = $st->fetchAll(PDO::FETCH_ASSOC);
+            };
+            $estadoLabel = ['aceptado' => 'Aceptado', 'rechazado' => 'Rechazado', 'pendiente' => 'Pendiente'];
+            foreach ($rows as &$row) {
+                $comps = $getComprobantes($row['email']);
+                $pago = '';
+                // 1) Comprobante cuyo concepto contiene el ID del ítem (token exacto)
+                foreach ($comps as $c) {
+                    if ($c['concepto_pago'] && strpos($c['concepto_pago'], $row['item_id']) !== false) {
+                        $pago = $estadoLabel[$c['estado']] ?? $c['estado'];
+                    }
+                }
+                // 2) Fallback: estatus del comprobante más reciente
+                if ($pago === '' && count($comps) > 0) {
+                    $ult = end($comps);
+                    $pago = ($estadoLabel[$ult['estado']] ?? $ult['estado']) . ' (general)';
+                }
+                if ($pago === '') $pago = 'Sin comprobante';
+                $row['pago'] = $pago;
+            }
+            unset($row);
+
             echo json_encode(['success' => true, 'roster' => $rows]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1069,8 +1113,14 @@ switch ($action) {
             // Cada subida es un registro NUEVO en el historial (append-only).
             $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado, reemplaza_id) VALUES (?,?,?,?,NOW(),'pendiente',?)")
                 ->execute([$correo, $currentFolio, $tipo_doc, $filename, $rootId]);
-            // Documento nuevo = nueva evidencia: quitar candado manual y recalcular
-            resetEstatusManual($pdo, $correo);
+            // IMPORTANTE: una subida del USUARIO NO debe deshacer una aceptación
+            // MANUAL del admin ("Confirmar Aceptación Total"). Por eso aquí NO se
+            // llama a resetEstatusManual: si el admin fijó el estatus a mano, se
+            // conserva y recalcEstatusDocumentos lo respeta (no lo reabre solo).
+            // El documento nuevo queda visible en el panel para que el admin lo
+            // revise cuando quiera; al revisarlo (review_doc) el modo automático
+            // se reactiva. Si el registro estaba en modo automático, el recálculo
+            // refleja el nuevo pendiente con normalidad.
             $newStatus = recalcEstatusDocumentos($pdo, $correo);
             echo json_encode(['success' => true, 'filename' => $filename, 'newStatus' => $newStatus]);
         } catch (Exception $e) {

@@ -91,6 +91,10 @@ try {
     $total = $_POST['total_hidden'] ?? '$0.00';
     $concepto = $_POST['concept_hidden'] ?? 'N/A';
 
+    // Bandera: actualización SIN ítems nuevos (evita el "movimiento fantasma"
+    // de $0 que se generaba al deseleccionar y aun así finalizar).
+    $sinItemsNuevos = false;
+
     // Seguridad: el total SIEMPRE se recalcula del lado servidor desde la BD.
     // Nunca se confía en el total_hidden del navegador porque el cliente
     // puede manipularlo (precios, descuento de taller gratis, etc.).
@@ -98,6 +102,7 @@ try {
         // Actualización: solo se cobran los ítems NUEVOS, sin descuento.
         $newWorkshops = array_diff(isset($_POST['workshop']) ? array_unique((array)$_POST['workshop']) : [], $prevWorkshopIds);
         $newVisits    = array_diff(isset($_POST['visit'])    ? array_unique((array)$_POST['visit'])    : [], $prevVisitIds);
+        $sinItemsNuevos = empty($newWorkshops) && empty($newVisits);
 
         $extraTotal = 0.0;
         foreach ($newWorkshops as $wid) {
@@ -150,9 +155,14 @@ try {
     $stmt3 = $pdo->prepare("INSERT INTO reg_evento (folio, tipo, total, concepto) VALUES (?, ?, ?, ?)");
     $stmt3->execute([$folio, $tipo, $total, $concepto]);
 
-    // Historial de conceptos generados (append-only, sobrevive a la Lógica de Sobreescritura)
-    $stmtConcepto = $pdo->prepare("INSERT INTO reg_conceptos_historial (correo, folio, concepto, total) VALUES (?, ?, ?, ?)");
-    $stmtConcepto->execute([$correo, $folio, $concepto, $total]);
+    // Historial de conceptos generados (append-only, sobrevive a la Lógica de Sobreescritura).
+    // Red de seguridad: si es una actualización SIN ítems nuevos, NO se registra el
+    // movimiento (evita el concepto fantasma de $0.00 en las vistas de usuario y admin).
+    // Las compras previas se conservan igual (se reinsertan más abajo por la fusión).
+    if (!$sinItemsNuevos) {
+        $stmtConcepto = $pdo->prepare("INSERT INTO reg_conceptos_historial (correo, folio, concepto, total) VALUES (?, ?, ?, ?)");
+        $stmtConcepto->execute([$correo, $folio, $concepto, $total]);
+    }
 
     // 3.1 DETALLES DE EVENTO (Talleres y Visitas)
     // IMPORTANTE: como el DELETE por correo borró (CASCADE) los detalles del folio

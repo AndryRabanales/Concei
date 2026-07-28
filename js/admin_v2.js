@@ -693,30 +693,36 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (match) conceptId = match[0].padStart(4, '0');
                     }
 
-                    // Bolitas de documentos: una bolita por cada archivo subido
+                    // Bolitas de documentos: una bolita por cada archivo subido.
+                    // Se agrupan por TIPO de documento, cada tipo en su propia línea
+                    // con una mini-etiqueta, para que con muchas compras no se
+                    // amontonen ni desborden la celda (observación 23-jul).
                     const DOC_DOTS = [
-                        { label: 'Comprobante de Pago',          docsKey: 'docs_comprobante' },
-                        { label: 'Identificación / Credencial',  docsKey: 'docs_identificacion' },
-                        { label: 'Constancia Fiscal (RFC)',      docsKey: 'docs_constancia' },
+                        { label: 'Comprobante de Pago',          short: 'Pago', docsKey: 'docs_comprobante' },
+                        { label: 'Identificación / Credencial',  short: 'ID',   docsKey: 'docs_identificacion' },
+                        { label: 'Constancia Fiscal (RFC)',      short: 'RFC',  docsKey: 'docs_constancia' },
                     ];
 
-                    const dotsHtml = DOC_DOTS
-                        .flatMap(d => {
-                            const estados = (item[d.docsKey] || '').split(',').filter(Boolean);
-                            return estados.map(st => {
-                                const bg     = st === 'aceptado'  ? '#10b981'
-                                             : st === 'rechazado' ? '#ef4444'
-                                             : '#94a3b8';
-                                const border = st === 'aceptado'  ? '2px solid #10b981'
-                                             : st === 'rechazado' ? '2px solid #ef4444'
-                                             : '2px solid #94a3b8';
-                                const title  = `${d.label}: ${st.toUpperCase()}`;
-                                return `<span title="${title}" style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${bg};border:${border};flex-shrink:0;"></span>`;
-                            });
-                        }).join('');
+                    const dotFor = (label, st) => {
+                        const bg = st === 'aceptado' ? '#10b981' : st === 'rechazado' ? '#ef4444' : '#94a3b8';
+                        return `<span title="${label}: ${st.toUpperCase()}" style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${bg};border:2px solid ${bg};flex-shrink:0;"></span>`;
+                    };
 
-                    const dotsWrapper = dotsHtml
-                        ? `<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">${dotsHtml}</div>`
+                    const dotRows = DOC_DOTS
+                        .map(d => {
+                            const estados = (item[d.docsKey] || '').split(',').filter(Boolean);
+                            if (estados.length === 0) return '';
+                            const dots = estados.map(st => dotFor(d.label, st)).join('');
+                            return `<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:3px;">
+                                        <span style="font-size:0.68rem;color:#94a3b8;font-weight:600;width:34px;flex-shrink:0;">${d.short}</span>
+                                        ${dots}
+                                    </div>`;
+                        })
+                        .filter(Boolean)
+                        .join('');
+
+                    const dotsWrapper = dotRows
+                        ? `<div style="display:flex;flex-direction:column;gap:1px;">${dotRows}</div>`
                         : `<span style="color:#94a3b8;font-size:0.8rem;">Sin docs</span>`;
 
                     // Historial de conceptos generados: uno por cada compra/registro realizado
@@ -1245,8 +1251,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             const st = docStatusLabel[doc.estado] || docStatusLabel.pendiente;
 
                             let title = info.title;
-                            if (num && doc.tipo_doc === 'comprobante') title = `${ordinalEs(num, 'm')} Comprobante de Pago`;
-                            else if (num && doc.tipo_doc === 'constancia') title = `RFC / Constancia Fiscal (${ordinalEs(num, 'f')} Compra)`;
+                            // Sin ordinal ("Primer/Segundo..."): tras unificar el folio
+                            // por cuenta (E2) el número siempre daba 1 ("Primer"). Ahora
+                            // el concepto de pago es lo que distingue cada comprobante.
+                            if (doc.tipo_doc === 'comprobante') title = 'Comprobante de Pago';
+                            else if (doc.tipo_doc === 'constancia') title = 'RFC / Constancia Fiscal';
                             // Concepto de pago de la compra a la que pertenece el comprobante
                             if (doc.tipo_doc === 'comprobante' && doc.concepto_pago) {
                                 title += ` - ${doc.concepto_pago}`;
@@ -1552,10 +1561,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (wrapper) wrapper.style.cssText = 'background:white;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;';
 
                 group.forEach((doc, idx) => {
-                    const n = purchaseNumByFolio[doc.folio];
                     let label = doc._spec.label;
-                    if (n && doc._spec.key === 'comprobante') label = `${ordinalEs(n, 'm')} Comprobante de Pago`;
-                    else if (n && doc._spec.key === 'constancia') label = `RFC / Constancia Fiscal (${ordinalEs(n, 'f')} Compra)`;
+                    // Sin ordinal: el concepto de pago (abajo) identifica cada comprobante.
+                    if (doc._spec.key === 'comprobante') label = 'Comprobante de Pago';
+                    else if (doc._spec.key === 'constancia') label = 'RFC / Constancia Fiscal';
                     // Concepto de pago de la compra a la que pertenece este comprobante
                     // (calculado por documento en el servidor, según su fecha de subida)
                     if (doc._spec.key === 'comprobante' && doc.concepto_pago) {
@@ -1999,7 +2008,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         (grupos[k] = grupos[k] || { info: r, alumnos: [] }).alumnos.push(r);
                     });
 
-                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Folio'];
+                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Pago', 'Folio'];
                     const lines = [headers.map(esc).join(',')];
 
                     Object.values(grupos).forEach(g => {
@@ -2009,7 +2018,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 tipoLabel(i.tipo_item), i.item_id, i.item_nombre, i.horario || '', i.modalidad || '',
                                 i.cupo || '', g.alumnos.length, idx + 1,
                                 ((a.nombre || '') + ' ' + (a.apellido || '')).trim(), a.email || '', a.telefono || '',
-                                a.institucion || '', a.folio || ''
+                                a.institucion || '', a.pago || '', a.folio || ''
                             ].map(esc).join(','));
                         });
                     });

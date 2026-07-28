@@ -1609,6 +1609,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Stage 2: Final Submit (after payproof)
+        // --- BLOQUEO DE REGISTRO FANTASMA ($0 sin ítems nuevos) ---
+        // Si un usuario que regresa reveló el pago con un taller/visita y luego
+        // lo deseleccionó, "Finalizar Registro" no debe generar un movimiento
+        // vacío. Se exige al menos un ítem NUEVO para continuar.
+        if (window.isReturningUser) {
+            const purchasedIds = window.purchasedItemIds || [];
+            const nuevosWs = Array.from(document.querySelectorAll('input[name="workshop[]"]:checked')).map(cb => cb.value).filter(id => !purchasedIds.includes(id));
+            const nuevasVi = Array.from(document.querySelectorAll('input[name="visit[]"]:checked')).map(cb => cb.value).filter(id => !purchasedIds.includes(id));
+            if (nuevosWs.length === 0 && nuevasVi.length === 0) {
+                // El botón aún no se ha deshabilitado en este punto, solo avisamos.
+                alert("No has seleccionado ningún taller o visita nuevo. Selecciona al menos uno para finalizar, o cierra la ventana si no deseas agregar nada.");
+                return;
+            }
+        }
+
         // --- VALIDACIÓN DE PAGO SI TOTAL > 0 ---
         const paymentProofInput = document.getElementById('paymentProof');
 
