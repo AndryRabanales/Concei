@@ -416,8 +416,47 @@ document.addEventListener('DOMContentLoaded', () => {
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Zona de peligro: reseteo total de usuarios (obs. 6-ago, Cambio 2) -->
+                    <div style="margin-top: 22px; padding: 16px 18px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px;">
+                        <p style="margin: 0 0 6px; font-weight: 700; color: #b91c1c; font-size: 0.95rem;"><i class="fa-solid fa-triangle-exclamation"></i> Zona de peligro</p>
+                        <p style="margin: 0 0 12px; color: #7f1d1d; font-size: 0.83rem;">Elimina a TODOS los usuarios registrados, libera talleres/visitas y reinicia el contador de ID a 0001. Útil para poner el sistema en cero después de las pruebas.</p>
+                        <button type="button" id="btnResetUsuarios" style="background: #b91c1c; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: 700; cursor: pointer;">
+                            <i class="fa-solid fa-radiation"></i> Reseteo de Usuarios
+                        </button>
+                    </div>
                 </div>
             `;
+
+            // ── Reseteo total de usuarios: doble confirmación (textos de la observación) ──
+            const btnReset = document.getElementById('btnResetUsuarios');
+            if (btnReset) {
+                btnReset.onclick = async () => {
+                    const c1 = window.confirm(
+                        "Esta acción eliminará a TODOS los usuarios registrados actualmente y reiniciará el contador de identificador de usuario al 0001. " +
+                        "¿Está seguro de querer eliminar a TODOS los usuarios registrados actualmente?"
+                    );
+                    if (!c1) return;
+                    const c2 = window.confirm("Una vez ejecutada esta acción, no se podrán recuperar los usuarios registrados.");
+                    if (!c2) return;
+                    btnReset.disabled = true;
+                    btnReset.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reseteando...';
+                    try {
+                        const res = await adminFetch('php/api.php?action=reset_users', { method: 'POST' });
+                        const result = await res.json();
+                        if (result.success) {
+                            alert('✅ Reseteo completado: todos los usuarios fueron eliminados, los cupos liberados y el contador de ID reiniciado a 0001.');
+                        } else {
+                            alert('Error: ' + (result.error || 'No se pudo completar el reseteo.'));
+                        }
+                    } catch (err) {
+                        alert('Error al conectar con el servidor: ' + err.message);
+                    } finally {
+                        btnReset.disabled = false;
+                        btnReset.innerHTML = '<i class="fa-solid fa-radiation"></i> Reseteo de Usuarios';
+                    }
+                };
+            }
 
             // If we are editing, populate the fields
             if (editingAdminId) {
@@ -638,7 +677,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 openModalBtn.style.display = 'none';
                 toggleActiveBtn.style.display = 'none';
             } else if (currentType === 'workshop' || currentType === 'visit') {
-                thead.innerHTML = `<th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>ID</th><th>Acciones</th>`;
+                thead.innerHTML = `<th>ID</th><th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
 
                 // El botón refleja la acción a realizar: si TODOS los items
@@ -651,7 +690,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? '<i class="fa-solid fa-power-off"></i> Desactivar Todos'
                     : '<i class="fa-solid fa-power-off"></i> Activar Todos';
             } else {
-                thead.innerHTML = `<th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>ID</th><th>Acciones</th>`;
+                thead.innerHTML = `<th>ID</th><th>Nombre</th><th>Detalles</th><th>Horario / Modalidad</th><th>Precio / Cupo</th><th>Acciones</th>`;
                 openModalBtn.style.display = 'flex';
                 toggleActiveBtn.style.display = 'none';
             }
@@ -765,10 +804,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         ? `<span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #dcfce7; color: #15803d; font-weight: 600; display: inline-block; margin-bottom: 4px;"><i class="fa-solid fa-circle-check"></i> Activo</span>`
                         : `<span style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #fee2e2; color: #b91c1c; font-weight: 600; display: inline-block; margin-bottom: 4px;"><i class="fa-solid fa-circle-xmark"></i> Inactivo</span>`;
                     tr.innerHTML = `
+                        <td><code style="background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; padding: 3px 8px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;">${item.id}</code></td>
                         <td>
                             ${statusBadge}
                             <strong style="display:block; margin-bottom: 4px; color: #1e293b;">${esc(item.name)}${newBadge}</strong>
                             <small style="color: var(--primary-color); display:block;"><strong>Instructor:</strong> ${esc(item.instructor) || 'Por definir'}</small>
+                            ${item.lugar ? `<small style="color: #64748b; display:block;"><strong>Lugar:</strong> ${esc(item.lugar)}</small>` : ''}
                             <small style="color: #64748b; display:block;"><strong>Dependencia:</strong> ${esc(item.dependency) || 'N/A'}</small>
                         </td>
                         <td style="max-width: 250px;">
@@ -788,7 +829,6 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <i class="fa-solid fa-user-group"></i> ${item.cupo_actual || 0} / ${item.capacity || 0}
                             </small>
                         </td>
-                        <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-weight: bold;">${item.id}</code></td>
                         <td>
                             <div class="actions">
                                 <button class="btn-icon btn-edit action-btn" data-action="editItem" data-id="${item.id}" data-type="${currentType}"><i class="fa-solid fa-pen"></i></button>
@@ -887,9 +927,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('itemId').value = '';
             }
 
-            // Limpiar contador de cupo actual al agregar nuevo
+            // Limpiar contador de cupo actual y lugar al agregar nuevo
             const currentVal = document.getElementById('itemCurrentValue');
             if (currentVal) currentVal.value = '0';
+            const lugarInput = document.getElementById('itemLugar');
+            if (lugarInput) lugarInput.value = '';
             const typeLabel = currentType === 'workshop' ? 'Taller' : 'Visita';
             document.getElementById('modalTitle').textContent = `Agregar ${typeLabel}`;
             document.querySelector('label[for="itemName"]').textContent = `Nombre de la ${typeLabel}`;
@@ -959,6 +1001,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('itemInstructor').value = item.instructor || '';
                 document.getElementById('itemDependency').value = item.dependency || '';
                 document.getElementById('itemModality').value = item.modality || 'Presencial';
+                document.getElementById('itemLugar').value = item.lugar || '';
                 document.getElementById('itemCapacity').value = item.capacity || 0;
                 
                 // Nuevo: Mostrar cupo actual (solo lectura en modal)
@@ -1011,6 +1054,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 instructor: document.getElementById('itemInstructor').value,
                 dependency: document.getElementById('itemDependency').value,
                 modality: document.getElementById('itemModality').value,
+                lugar: document.getElementById('itemLugar').value.trim(),
                 capacity: parseInt(document.getElementById('itemCapacity').value) || 0,
                 cupo_actual: parseInt(document.getElementById('itemCurrentValue')?.value) || 0,
                 activo: editingActivo
@@ -1211,6 +1255,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const docStatusLabel = {
                     aceptado:  { label: 'ACEPTADO',  cls: 'status-pill-success' },
                     rechazado: { label: 'RECHAZADO', cls: 'status-pill-danger' },
+                    rechazado_definitivo: { label: 'RECHAZO DEFINITIVO', cls: 'status-pill-danger' },
                     pendiente: { label: 'PENDIENTE', cls: 'status-pill-warning' },
                 };
 
@@ -1441,6 +1486,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const DOC_STATUS_MAP = {
             aceptado:  { label: 'ACEPTADO',  cls: 'status-pill-success', icon: 'fa-circle-check' },
             rechazado: { label: 'RECHAZADO', cls: 'status-pill-danger',  icon: 'fa-circle-xmark' },
+            rechazado_definitivo: { label: 'RECHAZO DEFINITIVO', cls: 'status-pill-danger', icon: 'fa-ban' },
             pendiente: { label: 'PENDIENTE', cls: 'status-pill-warning', icon: 'fa-clock' },
         };
 
@@ -1642,7 +1688,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const key = `doc-${doc.id}`;
             const isAceptado  = doc.estado === 'aceptado';
             const isRechazado = doc.estado === 'rechazado';
-            const isPendiente = !isAceptado && !isRechazado;
+            const isDefinitivo = doc.estado === 'rechazado_definitivo';
+            const isPendiente = !isAceptado && !isRechazado && !isDefinitivo;
+
+            // Un documento con RECHAZO DEFINITIVO es irreversible: sin botones.
+            if (isDefinitivo) {
+                return `
+                    <div style="font-size:0.85rem;color:#7f1d1d;background:#fecaca;padding:10px 14px;border-radius:8px;font-weight:700;">
+                        ⛔ Rechazado definitivamente. Las reservas de este pago fueron anuladas y el usuario no puede subir correcciones. Esta acción es irreversible.
+                    </div>
+                    ${doc.comentario ? `<div style="margin-top:6px;font-size:0.8rem;color:#7f1d1d;"><i class="fa-solid fa-comment-dots"></i> <strong>Motivo:</strong> ${esc(doc.comentario)}</div>` : ''}`;
+            }
 
             const btn = (label, icon, active, activeColor, activeBg, onclick, extraAttrs) => `
                 <button onclick="${locked ? '' : onclick}" ${locked ? 'disabled' : ''} ${extraAttrs || ''}
@@ -1654,11 +1710,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // se sanean en el servidor, no contienen comillas)
             const fname = (doc.archivo || '').replace(/^\d+_[^_]+_/, '');
 
+            // El rechazo definitivo solo aplica a comprobantes de pago
+            const esComprobante = doc._spec && doc._spec.key === 'comprobante';
+
             return `
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     ${btn('Aceptar', 'fa-check', isAceptado, '#15803d', '#dcfce7', `window.confirmDocReview(${doc.id},'aceptado','${fname}','${doc.estado}')`)}
                     ${btn('Rechazar', 'fa-xmark', isRechazado, '#b91c1c', '#fee2e2', `window.toggleRejectForm('${key}')`, `id="btn-rechazar-${key}"`)}
                     ${btn('Pendiente', 'fa-clock', isPendiente, '#92400e', '#fef9c3', `window.confirmDocReview(${doc.id},'pendiente','${fname}','${doc.estado}')`)}
+                    ${esComprobante ? btn('Rechazar Definitivo', 'fa-ban', false, '#7f1d1d', '#fecaca', `window.toggleRejectDefForm('${key}')`) : ''}
                 </div>
                 ${locked ? `<div style="margin-top:6px;font-size:0.8rem;color:#92400e;background:#fef9c3;padding:6px 10px;border-radius:6px;"><i class="fa-solid fa-lock"></i> Este documento ya tiene una versión más reciente que ya fue revisada. Si necesitas modificar esta versión anterior, primero regresa la versión más reciente a "Pendiente".</div>` : ''}
                 ${isRechazado ? `<div style="margin-top:6px;font-size:0.8rem;color:#b91c1c;"><i class="fa-solid fa-comment-dots"></i> <strong>Motivo:</strong> ${esc(doc.comentario) || 'Sin motivo especificado'}</div>` : ''}
@@ -1675,8 +1735,43 @@ document.addEventListener('DOMContentLoaded', () => {
                             Confirmar Rechazo
                         </button>
                     </div>
+                </div>
+                <div id="reject-def-form-${key}" style="display:none;margin-top:8px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;">
+                    <p style="margin:0 0 6px;font-size:0.8rem;color:#7f1d1d;font-weight:700;">⛔ Rechazo DEFINITIVO: anula las reservas de este pago y bloquea nuevas subidas. Irreversible.</p>
+                    <textarea id="reject-def-comment-${key}" placeholder="Motivo del rechazo definitivo..."
+                        style="width:100%;padding:8px;border:1px solid #f87171;border-radius:8px;font-size:0.85rem;resize:vertical;min-height:60px;box-sizing:border-box;font-family:inherit;display:block;"></textarea>
+                    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
+                        <button onclick="window.toggleRejectDefForm('${key}')"
+                            style="padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;background:white;color:#64748b;font-weight:600;cursor:pointer;font-size:0.8rem;">
+                            Cancelar
+                        </button>
+                        <button onclick="window.confirmRechazoDefinitivo(${doc.id},'${key}')"
+                            style="padding:6px 14px;border:none;border-radius:8px;background:#7f1d1d;color:white;font-weight:700;cursor:pointer;font-size:0.8rem;">
+                            Enviar Rechazo Definitivo
+                        </button>
+                    </div>
                 </div>`;
         }
+
+        // Alternar el formulario de rechazo definitivo
+        window.toggleRejectDefForm = (key) => {
+            const form = document.getElementById(`reject-def-form-${key}`);
+            if (!form) return;
+            const isHidden = form.style.display === 'none';
+            form.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) document.getElementById(`reject-def-comment-${key}`)?.focus();
+        };
+
+        // Confirmación (texto exacto de la observación 6-ago) y envío
+        window.confirmRechazoDefinitivo = (docId, key) => {
+            const comentario = document.getElementById(`reject-def-comment-${key}`)?.value || '';
+            const ok = window.confirm(
+                "Esta opción anulará todas las reservas del usuario relacionadas con el pago (talleres, visitas y/o registros de participación). " +
+                "¿Está seguro de querer rechazar definitivamente este comprobante de pago? La acción es irreversible."
+            );
+            if (!ok) return;
+            window.submitDocReview(docId, 'rechazado_definitivo', comentario);
+        };
 
         // Construye una tarjeta completa (con imagen visible) para UN solo
         // documento subido. Cada compra/RFC/identificación tiene su propia

@@ -176,6 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const statusCfg = {
                 aceptado:  { label: 'Aceptado',    color: '#15803d', bg: '#dcfce7', border: '#86efac', icon: '✅' },
                 rechazado: { label: 'Rechazado',   color: '#b91c1c', bg: '#fee2e2', border: '#fca5a5', icon: '❌' },
+                rechazado_definitivo: { label: 'Rechazo Definitivo', color: '#7f1d1d', bg: '#fecaca', border: '#f87171', icon: '⛔' },
                 pendiente: { label: 'En revisión', color: '#92400e', bg: '#fef3c7', border: '#fcd34d', icon: '⏳' },
             };
 
@@ -264,18 +265,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 panel.id = 'docStatusPanel';
                 panel.style.cssText = 'background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.08);margin-bottom:28px;overflow:hidden;';
 
-                // Header
+                // Header (incluye botón para cerrar sesión — obs. 6-ago, Cambio 5)
                 panel.innerHTML = `
-                    <div style="background:linear-gradient(135deg,#1e293b 0%,#0f4c75 100%);padding:20px 24px;display:flex;justify-content:space-between;align-items:center;">
+                    <div style="background:linear-gradient(135deg,#1e293b 0%,#0f4c75 100%);padding:20px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
                         <div>
                             <p style="margin:0 0 4px;font-size:0.75rem;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;">Mis Documentos</p>
                             <h3 style="margin:0;color:white;font-size:1.15rem;font-weight:700;">¡Hola de nuevo, ${u.nombre}!</h3>
                             <p style="margin:4px 0 0;font-size:0.8rem;color:rgba(255,255,255,0.6);">Folio: <strong style="color:#38bdf8;">${folio}</strong></p>
                         </div>
-                        <div style="padding:8px 16px;border-radius:20px;background:${sc.bg};border:1px solid ${sc.border};">
-                            <span style="font-weight:700;font-size:0.85rem;color:${sc.color};">${sc.label}</span>
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <div style="padding:8px 16px;border-radius:20px;background:${sc.bg};border:1px solid ${sc.border};">
+                                <span style="font-weight:700;font-size:0.85rem;color:${sc.color};">${sc.label}</span>
+                            </div>
+                            <button type="button" id="userLogoutBtn" style="padding:8px 16px;border-radius:20px;background:rgba(239,68,68,0.15);border:1px solid rgba(252,165,165,0.5);color:#fca5a5;font-weight:700;font-size:0.85rem;cursor:pointer;">
+                                <i class="fa-solid fa-right-from-bracket"></i> Cerrar Sesión
+                            </button>
                         </div>
                     </div>`;
+
+                // Cerrar sesión: limpia la sesión local y regresa al login
+                setTimeout(() => {
+                    const lb = document.getElementById('userLogoutBtn');
+                    if (lb) lb.addEventListener('click', () => {
+                        try {
+                            localStorage.removeItem('tempAccount');
+                            localStorage.removeItem('registrationDraft');
+                        } catch (e) {}
+                        window.location.href = 'index.html';
+                    });
+                }, 0);
 
                 // Pestañas (una por "subida"/compra), solo si hay más de una
                 if (purchases.length > 1) {
@@ -809,6 +827,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                ${isPurchased ? 'checked disabled' : (isReservedByMe ? 'checked' : '')}>
                         ${isPurchased ? `<input type="hidden" name="${type}[]" value="${item.id}">` : ''}
                         <div class="addon-content">
+                            <span style="display:inline-block;font-family:monospace;font-weight:800;font-size:0.72rem;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;padding:1px 7px;margin-bottom:4px;">${item.id}</span>
                             <div class="addon-header-premium">
                                 <div class="custom-check-premium ${isPurchased ? 'check-locked' : ''}">
                                     ${isPurchased ? '<i class="fa-solid fa-lock"></i>' : ''}
@@ -862,9 +881,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const current = item.cupo_actual || 0;
             const max = item.capacity || 30;
 
+            // El lugar solo aplica a los presenciales; los virtuales no tienen salón.
+            const modalidadItem = item.modalidad || item.modality || 'Presencial';
+            const lugarItem = (item.lugar || '').trim();
+            const lugarRow = (modalidadItem !== 'Virtual' && lugarItem)
+                ? `<div class="meta-item"><span>Lugar</span><span>${lugarItem.replace(/\s*\|\s*/g, ' y ')}</span></div>`
+                : '';
+
             metaContainer.innerHTML = `
                 <div class="meta-item"><span>Horario</span><span>${item.horario || item.hours || 'Pendiente'}</span></div>
-                <div class="meta-item"><span>Modalidad</span><span>${item.modalidad || item.modality || 'Presencial'}</span></div>
+                <div class="meta-item"><span>Modalidad</span><span>${modalidadItem}</span></div>
+                ${lugarRow}
                 <div class="meta-item"><span>Instructor</span><span>${item.instructor || 'Pendiente'}</span></div>
                 <div class="meta-item"><span>Dependencia</span><span>${item.dependencia || item.dependency || 'N/A'}</span></div>
                 <div class="meta-item"><span>Disponibilidad</span><span style="color: ${current >= max ? '#ef4444' : '#16a34a'}; font-weight: bold;">${current}/${max} (Ocupados/Total)</span></div>
@@ -2320,6 +2347,18 @@ document.getElementById('rfc')?.addEventListener('input', function (e) {
 // Hook into change events
 document.addEventListener("change", function (e) {
     if (e.target.matches("input[type=checkbox], input[type=radio]")) {
+        // Límite por compra: máximo 3 talleres y 3 visitas NUEVOS (los ya
+        // comprados no cuentan). Si excede, se desmarca y se avisa.
+        if (e.target.checked && (e.target.name === 'workshop[]' || e.target.name === 'visit[]')) {
+            const purchased = window.purchasedItemIds || [];
+            const nuevos = Array.from(document.querySelectorAll(`input[name="${e.target.name}"]:checked`))
+                .filter(cb => !cb.disabled && !purchased.includes(cb.value));
+            if (nuevos.length > 3) {
+                e.target.checked = false;
+                const tipo = e.target.name === 'workshop[]' ? 'talleres' : 'visitas';
+                alert(`Máximo 3 ${tipo} por compra. Finaliza esta compra y sube tu comprobante; después podrás adquirir más en una nueva compra.`);
+            }
+        }
         if (typeof window.updateSummary === 'function') {
             window.updateSummary();
         }

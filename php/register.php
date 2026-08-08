@@ -173,6 +173,16 @@ try {
     // pierde. La verificación de cupo solo se aplica a los ítems NUEVOS.
     $postWorkshops = array_map('strval', array_unique((array)($_POST['workshop'] ?? [])));
     $workshops = array_values(array_unique(array_merge($postWorkshops, array_map('strval', $prevWorkshopIds))));
+
+    // Límite por compra (obs. 6-ago, Cambio 8): máximo 3 talleres y 3 visitas
+    // NUEVOS por cada compra, para evitar conceptos de pago interminables.
+    // (Puede comprar más en compras posteriores.)
+    $nuevosW = array_diff($postWorkshops, array_map('strval', $prevWorkshopIds));
+    $nuevasV = array_diff(array_map('strval', array_unique((array)($_POST['visit'] ?? []))), array_map('strval', $prevVisitIds));
+    if (count($nuevosW) > 3 || count($nuevasV) > 3) {
+        throw new Exception("Máximo 3 talleres y 3 visitas por compra. Puedes adquirir más en una compra posterior, una vez subido el comprobante de esta.");
+    }
+
     if (!empty($workshops)) {
         foreach ($workshops as $w_id) {
             if (in_array($w_id, $prevWorkshopIds)) continue; // ya comprado: conserva su lugar, no re-verificar

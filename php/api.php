@@ -52,6 +52,11 @@ function recalcEstatusDocumentos($pdo, $correo) {
     }
     $estados = array_merge(array_values($chainLatest), array_values($looseLatest));
 
+    // Los hilos con RECHAZO DEFINITIVO quedan cerrados/anulados: sus reservas ya
+    // fueron liberadas y no admiten corrección, así que no cuentan para el
+    // estatus general (ni bloquean la aceptación del resto de documentos).
+    $estados = array_values(array_filter($estados, function ($e) { return $e !== 'rechazado_definitivo'; }));
+
     $hasDocs = count($estados) > 0;
     $allAccepted = $hasDocs;
     $anyRejected = false;
@@ -143,8 +148,8 @@ switch ($action) {
 
             // Traducimos los nombres de las columnas para que el JS los entienda siempre.
             // Orden numérico por id (ws1, ws2, ... ws31) para que T01..T31 salgan en orden.
-            $workshops = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_talleres ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
-            $visits = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, cupo as capacity, cupo_actual, activo FROM cat_visitas ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
+            $workshops = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, lugar, cupo as capacity, cupo_actual, activo FROM cat_talleres ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
+            $visits = $pdo->query("SELECT id, nombre as name, descripcion as description, precio as price, horario as hours, instructor, dependencia as dependency, modalidad as modality, lugar, cupo as capacity, cupo_actual, activo FROM cat_visitas ORDER BY CAST(REGEXP_REPLACE(id, '[^0-9]', '') AS UNSIGNED), id")->fetchAll(PDO::FETCH_ASSOC);
             $settings = $pdo->query("SELECT * FROM cat_ajustes")->fetchAll(PDO::FETCH_ASSOC);
             // Público: NO exponer usado_por/fecha_uso (datos sensibles de rastreo).
             $codes = $pdo->query("SELECT id, usado, fecha FROM cat_codigos")->fetchAll(PDO::FETCH_ASSOC);
@@ -669,10 +674,11 @@ switch ($action) {
 
             if ($existe) {
                 // EDICIÓN: el ID es inmutable, solo se actualizan los demás campos.
-                $stmt = $pdo->prepare("UPDATE $table SET nombre=?, descripcion=?, precio=?, horario=?, instructor=?, dependencia=?, modalidad=?, cupo=?, activo=? WHERE id=?");
+                $stmt = $pdo->prepare("UPDATE $table SET nombre=?, descripcion=?, precio=?, horario=?, instructor=?, dependencia=?, modalidad=?, lugar=?, cupo=?, activo=? WHERE id=?");
                 $stmt->execute([
                     $data['name'], $data['description'], $data['price'], $data['hours'],
                     $data['instructor'], $data['dependency'], $data['modality'],
+                    (trim($data['lugar'] ?? '') !== '' ? trim($data['lugar']) : null),
                     $data['capacity'], isset($data['activo']) ? (int)$data['activo'] : 1,
                     $clientId
                 ]);
@@ -692,11 +698,12 @@ switch ($action) {
 
                 $cupo_actual = isset($data['cupo_actual']) ? $data['cupo_actual'] : 0;
                 $activo = isset($data['activo']) ? (int)$data['activo'] : 1;
-                $stmt = $pdo->prepare("INSERT INTO $table (id, nombre, descripcion, precio, horario, instructor, dependencia, modalidad, cupo, cupo_actual, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt = $pdo->prepare("INSERT INTO $table (id, nombre, descripcion, precio, horario, instructor, dependencia, modalidad, lugar, cupo, cupo_actual, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 $stmt->execute([
                     $newId, $data['name'], $data['description'], $data['price'],
                     $data['hours'], $data['instructor'], $data['dependency'],
-                    $data['modality'], $data['capacity'], $cupo_actual, $activo
+                    $data['modality'], (trim($data['lugar'] ?? '') !== '' ? trim($data['lugar']) : null),
+                    $data['capacity'], $cupo_actual, $activo
                 ]);
                 echo json_encode(['success' => true, 'id' => $newId]);
             }
@@ -885,10 +892,11 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Datos incompletos']); break;
         }
         try {
-            $stmtDoc = $pdo->prepare("SELECT correo FROM reg_documentos WHERE id = ?");
+            $stmtDoc = $pdo->prepare("SELECT correo, tipo_doc, fecha_subida, reemplaza_id FROM reg_documentos WHERE id = ?");
             $stmtDoc->execute([$id]);
-            $correo = $stmtDoc->fetchColumn();
-            if (!$correo) { echo json_encode(['success' => false, 'error' => 'Documento no encontrado']); break; }
+            $docInfo = $stmtDoc->fetch(PDO::FETCH_ASSOC);
+            if (!$docInfo) { echo json_encode(['success' => false, 'error' => 'Documento no encontrado']); break; }
+            $correo = $docInfo['correo'];
 
             // Estatus previo, para notificar por correo solo cuando realmente cambie
             $stmtPrev = $pdo->prepare("SELECT estatus FROM reg_inscripciones WHERE correo = ? ORDER BY fecha_inscripcion DESC LIMIT 1");
@@ -901,6 +909,98 @@ switch ($action) {
             // equivoca de botón y luego vuelve a rechazar.
             $pdo->prepare("UPDATE reg_documentos SET estado=?, comentario=COALESCE(?, comentario), revisado_por=?, fecha_revision=? WHERE id=?")
                 ->execute([$estado, $comentario, $revisado_por, $fechaRevision, $id]);
+
+            // ── RECHAZO DEFINITIVO (obs. 6-ago, Cambio 3) ──────────────────────
+            // Anula las reservas ligadas a ese pago (talleres/visitas), y si el
+            // comprobante era del REGISTRO BASE de un tipo de paga, resetea el
+            // registro completo (la cuenta NO se borra). Bloquea nuevas subidas
+            // (el estado 'rechazado_definitivo' no admite corrección) y envía un
+            // correo específico.
+            if ($estado === 'rechazado_definitivo' && $docInfo['tipo_doc'] === 'comprobante') {
+                // Concepto del pago al que pertenece este comprobante (por fecha,
+                // usando la raíz de la cadena si es una corrección)
+                $refId = $docInfo['reemplaza_id'] ?: $id;
+                $stmtConc = $pdo->prepare("
+                    SELECT COALESCE(
+                        (SELECT h.concepto FROM reg_conceptos_historial h
+                          WHERE h.correo = ? AND h.fecha_generado <= (SELECT r0.fecha_subida FROM reg_documentos r0 WHERE r0.id = ?)
+                          ORDER BY h.fecha_generado DESC LIMIT 1),
+                        (SELECT h2.concepto FROM reg_conceptos_historial h2 WHERE h2.correo = ? ORDER BY h2.fecha_generado ASC LIMIT 1)
+                    )");
+                $stmtConc->execute([$correo, $refId, $correo]);
+                $conceptoPago = (string)$stmtConc->fetchColumn();
+
+                // ¿Era el pago del REGISTRO BASE? (el primer concepto del historial)
+                $stmtFirst = $pdo->prepare("SELECT concepto FROM reg_conceptos_historial WHERE correo = ? ORDER BY fecha_generado ASC LIMIT 1");
+                $stmtFirst->execute([$correo]);
+                $primerConcepto = (string)$stmtFirst->fetchColumn();
+
+                $stmtTipo = $pdo->prepare("SELECT e.tipo FROM reg_evento e JOIN reg_inscripciones i ON e.folio=i.folio WHERE i.correo = ? LIMIT 1");
+                $stmtTipo->execute([$correo]);
+                $tipoReg = (string)$stmtTipo->fetchColumn();
+
+                $esPagoBase = ($conceptoPago !== '' && $conceptoPago === $primerConcepto);
+                $esTipoDePaga = in_array($tipoReg, ['general', 'student_external'], true);
+
+                // Ítems (talleres/visitas) contenidos en el concepto de ese pago
+                preg_match_all('/[TV]\d{2,}/', $conceptoPago, $mIt);
+                $itemsPago = array_unique($mIt[0] ?? []);
+
+                if ($esPagoBase && $esTipoDePaga) {
+                    // Reset TOTAL del registro (como primera vez), conservando la
+                    // cuenta y el historial de documentos (para que vea el motivo).
+                    $stmtAll = $pdo->prepare("SELECT DISTINCT d.item_id, d.tipo_item FROM reg_evento_detalles d JOIN reg_inscripciones i ON d.folio=i.folio WHERE i.correo = ?");
+                    $stmtAll->execute([$correo]);
+                    $todos = $stmtAll->fetchAll(PDO::FETCH_ASSOC);
+                    $pdo->prepare("DELETE FROM reg_inscripciones WHERE correo = ?")->execute([$correo]); // CASCADE
+                    $pdo->prepare("DELETE FROM reg_reservas_temp WHERE correo = ?")->execute([$correo]);
+                    foreach ($todos as $it) {
+                        syncCapacity($pdo, $it['item_id'], $it['tipo_item'] === 'taller' ? 'workshop' : 'visit');
+                    }
+                } else {
+                    // Liberar SOLO los ítems de ese pago
+                    foreach ($itemsPago as $itemId) {
+                        $tipoItem = ($itemId[0] === 'T') ? 'taller' : 'visita';
+                        $pdo->prepare("DELETE d FROM reg_evento_detalles d JOIN reg_inscripciones i ON d.folio=i.folio WHERE i.correo = ? AND d.item_id = ? AND d.tipo_item = ?")
+                            ->execute([$correo, $itemId, $tipoItem]);
+                        syncCapacity($pdo, $itemId, $itemId[0] === 'T' ? 'workshop' : 'visit');
+                    }
+                }
+
+                // Correo específico de rechazo definitivo
+                try {
+                    $stmtP = $pdo->prepare("SELECT nombre, apellido FROM reg_personal p JOIN reg_inscripciones i ON p.folio=i.folio WHERE i.correo = ? LIMIT 1");
+                    $stmtP->execute([$correo]);
+                    $per = $stmtP->fetch() ?: ['nombre' => '', 'apellido' => ''];
+                    $stmtAcc2 = $pdo->prepare("SELECT id FROM ini_usuarios WHERE correo = ?");
+                    $stmtAcc2->execute([$correo]);
+                    $folioMail = 'CONCEI-2026-' . str_pad((int)$stmtAcc2->fetchColumn(), 4, '0', STR_PAD_LEFT);
+
+                    require_once 'mailer.php';
+                    $subjDef = "Documento Rechazado Definitivamente ConCEI-3 – Folio $folioMail";
+                    $bodyDef = "
+                    <div style='font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;'>
+                        <div style='background: #7f1d1d; color: white; padding: 28px 30px;'>
+                            <h1 style='margin: 0 0 6px; font-size: 22px;'>Congreso ConCEI-3</h1>
+                            <p style='margin: 0; font-size: 14px; opacity: 0.85;'>Documento Rechazado Definitivamente</p>
+                        </div>
+                        <div style='padding: 30px; color: #334155; line-height: 1.7;'>
+                            <p style='font-size: 16px;'>Estimado/a <strong style='color: #1e3a8a;'>{$per['nombre']} {$per['apellido']}</strong>,</p>
+                            <div style='background:#fee2e2; border-left:4px solid #dc2626; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#7f1d1d;'>
+                                <strong>Uno o más de tus documentos fueron rechazados definitivamente.</strong> Por favor, ingresa nuevamente a la plataforma con tu correo y contraseña para revisar el motivo. Si el documento correspondía al pago de registro de participación, deberá llenar los campos de registro nuevamente para subir un nuevo comprobante.
+                            </div>
+                            " . ($comentario ? "<p style='margin-top:16px;'><strong>Motivo:</strong> " . htmlspecialchars($comentario) . "</p>" : "") . "
+                            <p style='margin-top: 20px;'><strong>Folio de registro:</strong> <span style='color: #1e3a8a; font-family: monospace;'>$folioMail</span></p>
+                        </div>
+                        <div style='background: #f1f5f9; padding: 15px; text-align: center; font-size: 12px; color: #94a3b8;'>
+                            &copy; 2026 Congreso ConCEI-3 &mdash; Este es un correo automático, por favor no respondas a este mensaje.
+                        </div>
+                    </div>";
+                    sendRegistrationEmail($correo, $subjDef, $bodyDef);
+                } catch (Exception $eMailDef) {
+                    error_log("Error al enviar correo de rechazo definitivo: " . $eMailDef->getMessage());
+                }
+            }
 
             // La revisión de un documento es una acción explícita del admin:
             // el estatus vuelve al modo automático basado en documentos.
@@ -926,7 +1026,7 @@ switch ($action) {
                     require_once 'mailer.php';
 
                     $emailSubject = "Documentos Rechazados - ConCEI-3 — Folio $folioPersonal";
-                    $statusBanner = "<div style='background:#fee2e2; border-left:4px solid #dc2626; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#7f1d1d;'><strong>Uno o más de tus documentos fueron rechazados.</strong> Por favor, ingresa nuevamente a la plataforma con tu correo y contraseña para revisar el motivo y volver a subir el documento correspondiente.</div>";
+                    $statusBanner = "<div style='background:#fee2e2; border-left:4px solid #dc2626; padding:14px 18px; border-radius:0 8px 8px 0; font-size:14px; color:#7f1d1d;'><strong>Uno o más de tus documentos fueron rechazados.</strong> Por favor, ingresa nuevamente a la plataforma con tu correo y contraseña para revisar el motivo y volver a subir el documento correspondiente. Favor de atender esta corrección en las siguientes 48 horas. Posterior a este tiempo, los registros relacionados con el documento podrán ser rechazados definitivamente.</div>";
 
                     $emailBody = "
                     <div style='font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;'>
@@ -1129,27 +1229,74 @@ switch ($action) {
         break;
 
     case 'delete_reg':
+        // Eliminación REAL del usuario (obs. 6-ago, Cambio 1): borra su registro,
+        // su cuenta y todo lo ligado, LIBERA los cupos de sus talleres/visitas y,
+        // si era el último ID, permite que el siguiente usuario reutilice ese ID.
         requireAdmin($pdo);
         $folio = $_GET['folio'] ?? '';
         try {
-            // Eliminar historial de documentos del usuario (no tiene CASCADE)
             $stmtCorreo = $pdo->prepare("SELECT correo FROM reg_inscripciones WHERE folio = ?");
             $stmtCorreo->execute([$folio]);
             $correo = $stmtCorreo->fetchColumn();
-            if ($correo) {
-                $pdo->prepare("DELETE FROM reg_documentos WHERE correo = ?")->execute([$correo]);
-            }
-            // Eliminar de la tabla principal (el resto cae por CASCADE)
-            $stmt = $pdo->prepare("DELETE FROM reg_inscripciones WHERE folio = ?");
-            $stmt->execute([$folio]);
-            
-            if ($stmt->rowCount() > 0) {
-                echo json_encode(['success' => true]);
-            } else {
+            if (!$correo) {
                 echo json_encode(['success' => false, 'error' => 'No se encontró el registro con folio: ' . $folio]);
+                break;
             }
+
+            // 1. Capturar los talleres/visitas del usuario ANTES de borrar,
+            //    para recalcular sus cupos después.
+            $stmtItems = $pdo->prepare("SELECT DISTINCT d.item_id, d.tipo_item FROM reg_evento_detalles d JOIN reg_inscripciones i ON d.folio = i.folio WHERE i.correo = ?");
+            $stmtItems->execute([$correo]);
+            $itemsUsuario = $stmtItems->fetchAll(PDO::FETCH_ASSOC);
+
+            // 2. Borrar TODO lo del usuario (registro con CASCADE + tablas por correo + cuenta)
+            $pdo->prepare("DELETE FROM reg_documentos WHERE correo = ?")->execute([$correo]);
+            $pdo->prepare("DELETE FROM reg_conceptos_historial WHERE correo = ?")->execute([$correo]);
+            $pdo->prepare("DELETE FROM reg_reservas_temp WHERE correo = ?")->execute([$correo]);
+            $pdo->prepare("DELETE FROM password_resets WHERE email = ?")->execute([$correo]);
+            $pdo->prepare("DELETE FROM reg_inscripciones WHERE correo = ?")->execute([$correo]);
+            $pdo->prepare("DELETE FROM ini_usuarios WHERE correo = ?")->execute([$correo]);
+
+            // 3. LIBERAR los cupos: recalcular cada taller/visita que tenía
+            foreach ($itemsUsuario as $it) {
+                syncCapacity($pdo, $it['item_id'], $it['tipo_item'] === 'taller' ? 'workshop' : 'visit');
+            }
+
+            // 4. Regla del ID: AUTO_INCREMENT=1 hace que MySQL lo ajuste a MAX(id)+1.
+            //    Si el eliminado era el último, su ID queda disponible para el
+            //    siguiente registro; si no, la numeración existente se mantiene.
+            $pdo->exec("ALTER TABLE ini_usuarios AUTO_INCREMENT = 1");
+
+            echo json_encode(['success' => true, 'liberados' => count($itemsUsuario)]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => 'Error al eliminar registro: ' . $e->getMessage()]);
+        }
+        break;
+
+    case 'reset_users':
+        // Reseteo TOTAL de usuarios (obs. 6-ago, Cambio 2). Solo superadmin.
+        // Elimina a todos los usuarios registrados, libera talleres/visitas,
+        // limpia documentos/conceptos/reservas y reinicia el contador de ID a 0001.
+        $sessionReset = requireAdmin($pdo);
+        if (($sessionReset['rol'] ?? '') !== 'superadmin') {
+            echo json_encode(['success' => false, 'error' => 'Solo un Super Administrador puede ejecutar el reseteo.']);
+            break;
+        }
+        try {
+            $pdo->exec("DELETE FROM reg_documentos");
+            $pdo->exec("DELETE FROM reg_conceptos_historial");
+            $pdo->exec("DELETE FROM reg_reservas_temp");
+            $pdo->exec("DELETE FROM password_resets");
+            $pdo->exec("DELETE FROM reg_inscripciones"); // CASCADE: personal, evento, detalles, contribuciones, facturación, archivos
+            $pdo->exec("DELETE FROM ini_usuarios");
+            $pdo->exec("ALTER TABLE ini_usuarios AUTO_INCREMENT = 1");
+            // Liberar todos los cupos y los códigos que habían usado los usuarios borrados
+            $pdo->exec("UPDATE cat_talleres SET cupo_actual = 0");
+            $pdo->exec("UPDATE cat_visitas SET cupo_actual = 0");
+            $pdo->exec("UPDATE cat_codigos SET usado = 0, usado_por = NULL, fecha_uso = NULL WHERE usado_por IS NOT NULL");
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => 'Error en el reseteo: ' . $e->getMessage()]);
         }
         break;
     
