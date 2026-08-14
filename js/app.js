@@ -1493,7 +1493,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                // ES GRATIS (POR CÓDIGO), SALTAMOS LA REVELACIÓN DE PAGO
+                // ES GRATIS (POR CÓDIGO), SALTAMOS LA REVELACIÓN DE PAGO.
+                // Aun así se reservan los cupos aquí (igual que en el flujo normal):
+                // el usuario ya avanzó de etapa, así que sus talleres/visitas deben
+                // quedar apartados mientras finaliza.
+                try {
+                    const accDataCode = JSON.parse(localStorage.getItem('tempAccount') || '{}');
+                    const emailCode = accDataCode.email || '';
+                    const purchasedCode = window.purchasedItemIds || [];
+                    const wsCode = Array.from(document.querySelectorAll('input[name="workshop[]"]:checked')).map(cb => cb.value).filter(id => !purchasedCode.includes(id));
+                    const viCode = Array.from(document.querySelectorAll('input[name="visit[]"]:checked')).map(cb => cb.value).filter(id => !purchasedCode.includes(id));
+                    if (emailCode && (wsCode.length || viCode.length)) {
+                        const rc = await fetch('php/reserve_spots.php', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ email: emailCode, workshops: wsCode, visits: viCode, regType: 'code_access' })
+                        });
+                        const rcData = await rc.json();
+                        if (!rcData.success) {
+                            alert(rcData.error || 'No se pudo reservar el cupo. Intenta de nuevo.');
+                            renderDynamicOptions();
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error al reservar cupos (code_access):', e);
+                }
+
                 paymentSection.classList.remove('hidden');
                 paymentSection.classList.add('reveal-active');
                 applyFreeRegistrationUI(paymentSection, totalValue);

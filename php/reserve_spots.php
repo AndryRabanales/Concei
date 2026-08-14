@@ -29,21 +29,23 @@ try {
         }
     }
 
-    // 2. Liberar cupos previos para permitir re-selección
-    foreach ($prevItems['workshops'] as $w_id) {
-        // Al liberar, simplemente restamos y luego sincronizamos para asegurar exactitud
-        $pdo->prepare("UPDATE cat_talleres SET cupo_actual = GREATEST(0, cupo_actual - 1) WHERE id = ?")->execute([$w_id]);
-        syncCapacity($pdo, $w_id, 'workshop');
-    }
-    foreach ($prevItems['visits'] as $v_id) {
-        $pdo->prepare("UPDATE cat_visitas SET cupo_actual = GREATEST(0, cupo_actual - 1) WHERE id = ?")->execute([$v_id]);
-        syncCapacity($pdo, $v_id, 'visit');
-    }
-
-    // 3. Guardar el nuevo estado de reserva TEMPORALMENTE para que syncCapacity lo vea
+    // 2. Guardar PRIMERO el nuevo estado de la reserva. Es importante hacerlo
+    //    antes de recalcular: si se sincronizaba con la reserva anterior aún
+    //    guardada, syncCapacity volvía a contar los ítems que el usuario acababa
+    //    de soltar y el contador se quedaba "pegado" (el admin veía un lugar
+    //    ocupado fantasma).
     $newItemsJson = json_encode(['workshops' => $newWorkshops, 'visits' => $newVisits]);
     $stmtSave = $pdo->prepare("REPLACE INTO reg_reservas_temp (correo, items_json) VALUES (?, ?)");
     $stmtSave->execute([$email, $newItemsJson]);
+
+    // 3. Recalcular los cupos de los ítems que el usuario SOLTÓ (estaban en la
+    //    reserva anterior y ya no están en la nueva), para liberarlos de verdad.
+    foreach (array_diff($prevItems['workshops'], $newWorkshops) as $w_id) {
+        syncCapacity($pdo, $w_id, 'workshop');
+    }
+    foreach (array_diff($prevItems['visits'], $newVisits) as $v_id) {
+        syncCapacity($pdo, $v_id, 'visit');
+    }
 
     // 4. Verificar nuevos cupos (Ahora syncCapacity contará la reserva que acabamos de hacer)
     foreach ($newWorkshops as $w_id) {
