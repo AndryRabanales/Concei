@@ -283,10 +283,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                     </div>`;
 
-                // Cerrar sesión: limpia la sesión local y regresa al login
+                // Cerrar sesión: libera la reserva temporal (si la hubiera), limpia
+                // la sesión local y regresa al login.
                 setTimeout(() => {
                     const lb = document.getElementById('userLogoutBtn');
-                    if (lb) lb.addEventListener('click', () => {
+                    if (lb) lb.addEventListener('click', async () => {
+                        try {
+                            await fetch('php/reserve_spots.php', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ email: userEmail, workshops: [], visits: [] })
+                            });
+                        } catch (e) {}
                         try {
                             localStorage.removeItem('tempAccount');
                             localStorage.removeItem('registrationDraft');
@@ -1002,8 +1010,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
 
-                    // 3. Procesar reserva en BD si hay email
-                    if (email !== 'No proporcionado') {
+                    // 3. Sincronizar la reserva en BD SOLO cuando el usuario ya avanzó
+                    // a la etapa de pago ("Completar Registro y Pagar"). Palomear una
+                    // casilla antes de eso NO aparta lugar (obs. WhatsApp: si todos
+                    // marcan sin comprar, los talleres se llenaban en falso).
+                    const pagoVisible = !document.getElementById('paymentRevealSection')?.classList.contains('hidden');
+                    if (email !== 'No proporcionado' && pagoVisible) {
                         const purchasedIds = window.purchasedItemIds || [];
                         // Solo se reservan temporalmente los items NUEVOS; los ya comprados
                         // ya están contados en reg_evento_detalles y no deben volver a verificarse.
@@ -1724,7 +1736,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const regTypeLabels = {
                             'general': 'Público General / Profesional',
                             'student_external': 'Estudiante Externo',
-                            'student_uady': 'Estudiante UADY',
+                            'student_uady': 'Estudiante/Profesor UADY',
                             'code_access': 'Acceso por Código / Convenio'
                         };
                         regTypeLabel = selectedRegTypeEl ? (regTypeLabels[selectedRegTypeEl.value] || selectedRegTypeEl.value) : '';

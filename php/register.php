@@ -337,7 +337,7 @@ try {
         $tipoLabels = [
             'general'          => 'Público General / Profesional',
             'student_external' => 'Estudiante Externo',
-            'student_uady'     => 'Estudiante UADY',
+            'student_uady'     => 'Estudiante/Profesor UADY',
             'code_access'      => 'Acceso por Código / Convenio',
         ];
         $tipoLabel = $tipoLabels[$tipo] ?? $tipo;

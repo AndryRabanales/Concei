@@ -1223,7 +1223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const regTypeNames = {
                     'general': 'Público General / Profesional',
                     'student_external': 'Estudiante Externo',
-                    'student_uady': 'Estudiante UADY',
+                    'student_uady': 'Estudiante/Profesor UADY',
                     'code_access': 'Acceso Especial por Código / Convenio'
                 };
                 document.getElementById('det-regtype').textContent = regTypeNames[data.regType] || data.regType || 'N/A';
