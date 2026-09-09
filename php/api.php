@@ -643,9 +643,14 @@ switch ($action) {
         requireAdmin($pdo);
         $data = json_decode(file_get_contents('php://input'), true);
         try {
+            // Solo las cuotas de registro son editables desde el admin; los
+            // contadores internos (seq_taller, seq_visita) no deben tocarse.
+            $editables = ['general', 'student_external', 'student_uady'];
             $stmt = $pdo->prepare("UPDATE cat_ajustes SET valor = ? WHERE clave = ?");
-            foreach ($data as $key => $value) {
-                $stmt->execute([$value, $key]);
+            foreach ((array)$data as $key => $value) {
+                if (!in_array($key, $editables, true)) continue;
+                if (!is_numeric($value) || (float)$value < 0) throw new Exception("Precio inválido para $key");
+                $stmt->execute([number_format((float)$value, 2, '.', ''), $key]);
             }
             echo json_encode(['success' => true]);
         } catch (Exception $e) {

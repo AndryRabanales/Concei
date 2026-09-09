@@ -6,20 +6,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalDisplay = document.getElementById('totalAmount');
     const regOptions = document.querySelectorAll('input[name="regType"]');
 
-    // Unique ID for Payment Concept (Sequential from DB, starts at 0001)
+    // ID del concepto de pago: SIEMPRE es el ID de la cuenta del usuario
+    // (lo devuelve get_initial_data como accountId, ver renderDynamicOptions).
+    // Antes también se pedía un "siguiente ID" calculado como COUNT+1 que no
+    // pertenecía a nadie; como ambas peticiones competían, dos personas podían
+    // terminar con el mismo número de concepto.
     if (!window.paymentConceptId) {
-        window.paymentConceptId = 1; // Default fallback
-        // Fetch next sequential ID from backend
-        fetch('php/api.php?action=get_next_concept_id')
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    window.paymentConceptId = data.next_id;
-                    console.log("Sequential Concept ID assigned:", window.paymentConceptId);
-                    if (typeof window.updatePaymentConcept === 'function') window.updatePaymentConcept();
-                }
-            })
-            .catch(err => console.warn("Could not fetch concept ID, using fallback:", err));
+        window.paymentConceptId = 0;
     }
 
     // Select ALL add-on checkboxes (Workshops, Visits, Contests)
@@ -2314,7 +2307,7 @@ window.updatePaymentConcept = function () {
 
     if (!conceptDisplay) return;
 
-    const idStr = (window.paymentConceptId || 1000).toString().padStart(4, '0');
+    const idStr = (window.paymentConceptId || 0).toString().padStart(4, '0');
 
     // --- Si es usuario recurrente: concepto SOLO con ID + nuevos talleres/visitas ---
     if (window.isReturningUser) {

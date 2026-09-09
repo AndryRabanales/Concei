@@ -90,6 +90,15 @@ try {
     $tipo = $_POST['regType'] ?? '';
     $total = $_POST['total_hidden'] ?? '$0.00';
     $concepto = $_POST['concept_hidden'] ?? 'N/A';
+    // El número inicial del concepto DEBE ser el ID de la cuenta (el mismo del
+    // folio). El navegador lo manda, pero no se confía en él: se sustituye por
+    // el real para que dos usuarios nunca compartan concepto/ID.
+    if ($accountId > 0) {
+        $idReal = str_pad($accountId, 4, '0', STR_PAD_LEFT);
+        $concepto = preg_match('/^\d+/', $concepto)
+            ? preg_replace('/^\d+/', $idReal, $concepto, 1)
+            : ($concepto === 'N/A' ? $concepto : $idReal . $concepto);
+    }
 
     // Bandera: actualización SIN ítems nuevos (evita el "movimiento fantasma"
     // de $0 que se generaba al deseleccionar y aun así finalizar).
@@ -288,20 +297,28 @@ try {
     // cada archivo subido se guarda como un registro nuevo, nunca se sobreescribe.
     $stmtDoc = $pdo->prepare("INSERT INTO reg_documentos (correo, folio, tipo_doc, archivo, fecha_subida, estado) VALUES (?, ?, ?, ?, NOW(), 'pendiente')");
 
+    // Nombre de archivo seguro: solo letras, números, punto, guion y guion bajo
+    // (mismo criterio que reupload_doc en api.php). Un nombre con comillas o
+    // apóstrofos (p. ej. "Carte d'etudiant.pdf") rompía los botones del admin.
+    $safeName = function ($name) {
+        $s = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($name));
+        return $s !== '' ? $s : 'archivo';
+    };
+
     if (isset($_FILES['paymentProof']) && $_FILES['paymentProof']['error'] === UPLOAD_ERR_OK) {
-        $newProof = time() . '_proof_' . basename($_FILES['paymentProof']['name']);
+        $newProof = time() . '_proof_' . $safeName($_FILES['paymentProof']['name']);
         if (move_uploaded_file($_FILES['paymentProof']['tmp_name'], $uploadDir . $newProof)) {
             $stmtDoc->execute([$correo, $folio, 'comprobante', $newProof]);
         }
     }
     if (isset($_FILES['uadyIdFile']) && $_FILES['uadyIdFile']['error'] === UPLOAD_ERR_OK) {
-        $newId = time() . '_id_' . basename($_FILES['uadyIdFile']['name']);
+        $newId = time() . '_id_' . $safeName($_FILES['uadyIdFile']['name']);
         if (move_uploaded_file($_FILES['uadyIdFile']['tmp_name'], $uploadDir . $newId)) {
             $stmtDoc->execute([$correo, $folio, 'identificacion', $newId]);
         }
     }
     if (isset($_FILES['constanciaFile']) && $_FILES['constanciaFile']['error'] === UPLOAD_ERR_OK) {
-        $newConst = time() . '_const_' . basename($_FILES['constanciaFile']['name']);
+        $newConst = time() . '_const_' . $safeName($_FILES['constanciaFile']['name']);
         if (move_uploaded_file($_FILES['constanciaFile']['tmp_name'], $uploadDir . $newConst)) {
             $stmtDoc->execute([$correo, $folio, 'constancia', $newConst]);
         }

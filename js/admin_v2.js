@@ -635,6 +635,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const thead = document.querySelector('.data-table thead tr');
 
+            const pricesSec = document.getElementById('pricesSectionContainer');
+            if (currentType === 'prices') {
+                document.querySelector('.data-card').style.display = 'none';
+                if (adminSec) adminSec.style.display = 'none';
+                openModalBtn.style.display = 'none';
+                toggleActiveBtn.style.display = 'none';
+                renderPricesSection(data.prices || {});
+                return;
+            }
+            if (pricesSec) pricesSec.style.display = 'none';
+
             if (currentType === 'admins') {
                 document.querySelector('.data-card').style.display = 'none';
                 openModalBtn.style.display = 'none';
@@ -841,6 +852,78 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // --- Precios de registro (cuotas del congreso en cat_ajustes) ---
+        // Cada compra guarda su total en el momento de registrarse, así que cambiar
+        // aquí un precio NO altera lo que ya pagaron los registrados anteriores.
+        const PRICE_FIELDS = [
+            { key: 'general',          label: 'General',                   icon: 'fa-user' },
+            { key: 'student_external', label: 'Estudiante (externo)',      icon: 'fa-graduation-cap' },
+            { key: 'student_uady',     label: 'Estudiante/Profesor UADY',  icon: 'fa-building-columns' }
+        ];
+
+        function renderPricesSection(prices) {
+            let sec = document.getElementById('pricesSectionContainer');
+            if (!sec) {
+                sec = document.createElement('div');
+                sec.id = 'pricesSectionContainer';
+                document.querySelector('.data-card').parentNode.appendChild(sec);
+            }
+            sec.style.display = 'block';
+
+            const rows = PRICE_FIELDS.map(f => `
+                <div style="display:flex;align-items:center;gap:16px;padding:16px 0;border-bottom:1px solid var(--border-color);flex-wrap:wrap;">
+                    <div style="width:42px;height:42px;border-radius:10px;background:#eff6ff;color:var(--primary-color);display:flex;align-items:center;justify-content:center;font-size:1.1rem;">
+                        <i class="fa-solid ${f.icon}"></i>
+                    </div>
+                    <div style="flex:1;min-width:180px;">
+                        <div style="font-weight:700;">${f.label}</div>
+                        <div style="font-size:0.8rem;color:var(--text-light);">Precio actual: <strong>$${parseFloat(prices[f.key] || 0).toFixed(2)} MXN</strong></div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="color:var(--text-light);font-weight:600;">$</span>
+                        <input type="number" min="0" step="0.01" id="price_${f.key}" value="${parseFloat(prices[f.key] || 0).toFixed(2)}"
+                            style="width:130px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:1rem;font-family:inherit;font-weight:600;text-align:right;">
+                        <span style="color:var(--text-light);font-size:0.85rem;">MXN</span>
+                    </div>
+                </div>`).join('');
+
+            sec.innerHTML = `
+                <div class="data-card" style="max-width:720px;">
+                    ${rows}
+                    <div style="margin-top:18px;padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:0.85rem;color:#92400e;">
+                        <i class="fa-solid fa-circle-info"></i>
+                        El nuevo precio aplica a quienes se registren <strong>a partir de guardar</strong>. Los registros anteriores conservan el precio con el que se inscribieron (por ejemplo, el de preventa).
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:18px;">
+                        <button class="btn-save" id="savePricesBtn"><i class="fa-solid fa-floppy-disk"></i> Guardar Precios</button>
+                    </div>
+                </div>`;
+
+            document.getElementById('savePricesBtn').onclick = async () => {
+                const payload = {};
+                for (const f of PRICE_FIELDS) {
+                    const v = parseFloat(document.getElementById(`price_${f.key}`).value);
+                    if (isNaN(v) || v < 0) { alert(`El precio de "${f.label}" no es válido.`); return; }
+                    payload[f.key] = v.toFixed(2);
+                }
+                const resumen = PRICE_FIELDS.map(f => `• ${f.label}: $${payload[f.key]} MXN`).join('\n');
+                if (!confirm(`¿Guardar estos precios?\n\n${resumen}\n\nSe verán de inmediato en la página de registro.`)) return;
+                try {
+                    const res = await adminFetch('php/api.php?action=update_settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const r = await res.json();
+                    if (!r.success) throw new Error(r.error || 'Error al guardar');
+                    alert('Precios guardados correctamente.');
+                    renderItems();
+                } catch (e) {
+                    alert('No se pudieron guardar los precios: ' + e.message);
+                }
+            };
+        }
+
         // Sidebar Navigation
         menuItems.forEach(item => {
             item.addEventListener('click', () => {
@@ -871,6 +954,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (currentType === 'admins') {
                     pageTitle.textContent = 'Gestión de Administradores';
                     pageDescription.textContent = 'Administra las cuentas de administrador y sus permisos de acceso.';
+                    openModalBtn.style.display = 'none';
+                } else if (currentType === 'prices') {
+                    pageTitle.textContent = 'Precios de Registro';
+                    pageDescription.textContent = 'Cuotas de inscripción al congreso (General, Estudiante externo y UADY). Los talleres y visitas se editan en su propia sección.';
                     openModalBtn.style.display = 'none';
                 } else {
                     pageTitle.textContent = 'Códigos de Registro';
@@ -1706,9 +1793,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     <i class="fa-solid ${icon}"></i> ${label}
                 </button>`;
 
-            // Nombre corto del archivo para las ventanas de confirmación (los nombres
-            // se sanean en el servidor, no contienen comillas)
-            const fname = (doc.archivo || '').replace(/^\d+_[^_]+_/, '');
+            // Nombre corto del archivo para las ventanas de confirmación. Se escapa
+            // porque va dentro de un onclick: archivos ya subidos pueden traer
+            // comillas o apóstrofos (p. ej. "Carte d'etudiant.pdf") y sin escapar
+            // el botón Aceptar/Pendiente no hacía nada.
+            const fname = (doc.archivo || '').replace(/^\d+_[^_]+_/, '')
+                .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
             // El rechazo definitivo solo aplica a comprobantes de pago
             const esComprobante = doc._spec && doc._spec.key === 'comprobante';
