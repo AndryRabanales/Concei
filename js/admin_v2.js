@@ -754,8 +754,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     ];
 
                     const dotFor = (label, st) => {
-                        const bg = st === 'aceptado' ? '#10b981' : st === 'rechazado' ? '#ef4444' : '#94a3b8';
-                        return `<span title="${label}: ${st.toUpperCase()}" style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${bg};border:2px solid ${bg};flex-shrink:0;"></span>`;
+                        // Verde aceptado, rojo rechazado, rojo oscuro rechazo definitivo,
+                        // gris pendiente. Antes el definitivo caía en gris como si
+                        // estuviera pendiente.
+                        const bg = st === 'aceptado' ? '#10b981'
+                                 : st === 'rechazado' ? '#ef4444'
+                                 : st === 'rechazado_definitivo' ? '#991b1b'
+                                 : '#94a3b8';
+                        const txt = st === 'rechazado_definitivo' ? 'RECHAZO DEFINITIVO' : st.toUpperCase();
+                        return `<span title="${label}: ${txt}" style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${bg};border:2px solid ${bg};flex-shrink:0;"></span>`;
                     };
 
                     const dotRows = DOC_DOTS
@@ -1634,7 +1641,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const tabNum = idx + 1;
                 const estados = p.docs.map(d => d.estado);
                 let dotColor = '#15803d', dotTitle = 'Todo aceptado';
-                if (estados.includes('rechazado')) { dotColor = '#b91c1c'; dotTitle = 'Tiene rechazos pendientes'; }
+                if (estados.includes('rechazado_definitivo')) { dotColor = '#991b1b'; dotTitle = 'Pago rechazado definitivamente'; }
+                else if (estados.includes('rechazado')) { dotColor = '#b91c1c'; dotTitle = 'Tiene rechazos pendientes'; }
                 else if (estados.some(e => e !== 'aceptado')) { dotColor = '#92400e'; dotTitle = 'En revisión'; }
 
                 const label = p.num ? `${ordinalEs(p.num, 'f')} Subida` : 'Documentos del Registro';
@@ -2193,8 +2201,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         (grupos[k] = grupos[k] || { info: r, alumnos: [] }).alumnos.push(r);
                     });
 
-                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Pago', 'Folio'];
+                    const headers = ['Tipo', 'ID', 'Taller/Visita', 'Horario', 'Modalidad', 'Cupo', 'Inscritos', 'No.', 'ID Registro', 'Alumno', 'Correo', 'Teléfono', 'Institución', 'Pago', 'Folio'];
                     const lines = [headers.map(esc).join(',')];
+
+                    // ID corto del registro (los 4 dígitos del folio, p. ej. CONCEI-2026-0046 -> 0046).
+                    // Se escribe como fórmula de texto ="0046" para que Excel no le quite
+                    // los ceros de la izquierda al abrir el CSV.
+                    const idRegistro = folio => {
+                        const m = String(folio || '').match(/(\d+)$/);
+                        return m ? `="${m[1]}"` : '';
+                    };
 
                     Object.values(grupos).forEach(g => {
                         const i = g.info;
@@ -2202,6 +2218,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             lines.push([
                                 tipoLabel(i.tipo_item), i.item_id, i.item_nombre, i.horario || '', i.modalidad || '',
                                 i.cupo || '', g.alumnos.length, idx + 1,
+                                idRegistro(a.folio),
                                 ((a.nombre || '') + ' ' + (a.apellido || '')).trim(), a.email || '', a.telefono || '',
                                 a.institucion || '', a.pago || '', a.folio || ''
                             ].map(esc).join(','));
