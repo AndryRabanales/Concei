@@ -76,6 +76,20 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
+            /* En laptops (≈1366px) los botones del encabezado no cabían en una
+               línea y quedaban fuera de la pantalla: ahora bajan de renglón. */
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+
+        .btn-add {
+            white-space: nowrap;
+        }
+
+        @media (max-width: 1400px) {
+            .main-content {
+                padding: 28px;
+            }
         }
 
         .btn-add {
@@ -398,7 +412,10 @@
                 <h1 id="pageTitle">Usuarios Registrados</h1>
                 <p id="pageDescription" style="color: var(--text-light); margin-top: 5px;">Gestiona los registros, valida pagos y actualiza el estatus de los usuarios.</p>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center;">
+            <div class="header-actions" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end;">
+                <button class="btn-add" id="releaseReservationsBtn" style="display: none; background: #b45309;">
+                    <i class="fa-solid fa-unlock"></i> Liberar reservas sin comprobante
+                </button>
                 <button class="btn-add" id="downloadSvgBtn" style="display: none; background: #0f766e;">
                     <i class="fa-solid fa-file-csv"></i> Descargar CSV
                 </button>
@@ -719,7 +736,7 @@
         </div>
     </div>
 
-    <script src="js/admin_v2.js?v=33"></script>
+    <script src="js/admin_v2.js?v=34"></script>
 </body>
 
 </html>

@@ -11,6 +11,36 @@ try {
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
     /**
+     * Elimina las reservas temporales expiradas (> 30 min) y RECALCULA el cupo
+     * de cada taller/visita que tenían apartado. Antes solo se borraban las
+     * filas y el contador (cupo_actual) se quedaba con el valor viejo, por lo
+     * que un taller podía verse "lleno" con reservas que ya no existían.
+     * Devuelve la cantidad de reservas liberadas.
+     */
+    function purgeExpiredReservations($pdo) {
+        return releaseReservations($pdo, "updated_at < NOW() - INTERVAL 30 MINUTE");
+    }
+
+    /**
+     * Libera las reservas temporales que cumplan la condición SQL dada (por
+     * defecto todas) y sincroniza los cupos afectados.
+     */
+    function releaseReservations($pdo, $whereSql = '1=1') {
+        $rows = $pdo->query("SELECT items_json FROM reg_reservas_temp WHERE $whereSql")->fetchAll();
+        if (!$rows) return 0;
+        $pdo->exec("DELETE FROM reg_reservas_temp WHERE $whereSql");
+        $ws = []; $vs = [];
+        foreach ($rows as $r) {
+            $it = json_decode($r['items_json'], true) ?: [];
+            foreach ($it['workshops'] ?? [] as $id) $ws[$id] = true;
+            foreach ($it['visits'] ?? [] as $id) $vs[$id] = true;
+        }
+        foreach (array_keys($ws) as $id) syncCapacity($pdo, $id, 'workshop');
+        foreach (array_keys($vs) as $id) syncCapacity($pdo, $id, 'visit');
+        return count($rows);
+    }
+
+    /**
      * Sincroniza el cupo_actual de un taller o visita basándose en:
      * 1. Registros confirmados (reg_evento_detalles)
      * 2. Reservas temporales activas (reg_reservas_temp, < 30 mins)

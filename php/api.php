@@ -143,8 +143,8 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'get_initial_data':
         try {
-            // Limpiar reservas antiguas antes de cargar
-            $pdo->prepare("DELETE FROM reg_reservas_temp WHERE updated_at < NOW() - INTERVAL 30 MINUTE")->execute();
+            // Limpiar reservas expiradas antes de cargar (y recalcular sus cupos)
+            purgeExpiredReservations($pdo);
 
             // Traducimos los nombres de las columnas para que el JS los entienda siempre.
             // Orden numérico por id (ws1, ws2, ... ws31) para que T01..T31 salgan en orden.
@@ -634,6 +634,20 @@ switch ($action) {
                 $folio
             ]);
             echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'release_temp_reservations':
+        // Libera TODAS las reservas temporales (apartados de usuarios que dieron
+        // "Completar Registro y Pagar" pero aún no finalizan con comprobante) y
+        // recalcula los cupos. Las compras ya finalizadas no se tocan: al
+        // finalizar, register.php elimina la reserva temporal del usuario.
+        requireAdmin($pdo);
+        try {
+            $n = releaseReservations($pdo);
+            echo json_encode(['success' => true, 'liberadas' => $n]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }

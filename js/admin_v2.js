@@ -174,6 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const downloadSvgBtn = document.getElementById('downloadSvgBtn');
         const downloadRosterBtn = document.getElementById('downloadRosterBtn');
         const toggleActiveBtn = document.getElementById('toggleActiveBtn');
+        const releaseReservationsBtn = document.getElementById('releaseReservationsBtn');
         const closeModalBtns = [
             document.getElementById('closeModalBtn'),
             document.querySelector('.close'),
@@ -696,6 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // inactivo, se ofrece activar todos.
                 const allActive = items.length > 0 && items.every(item => String(item.activo) !== '0');
                 toggleActiveBtn.style.display = 'flex';
+                if (releaseReservationsBtn) releaseReservationsBtn.style.display = 'flex';
                 toggleActiveBtn.dataset.targetActive = allActive ? '0' : '1';
                 toggleActiveBtn.innerHTML = allActive
                     ? '<i class="fa-solid fa-power-off"></i> Desactivar Todos'
@@ -859,6 +861,34 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // --- Liberar reservas temporales sin comprobante (vista Talleres / Visitas) ---
+        // Un usuario que da "Completar Registro y Pagar" aparta sus cupos; si nunca
+        // finaliza con comprobante, el apartado expira solo a los 30 min. Este
+        // botón lo hace de inmediato para todos los apartados pendientes.
+        if (releaseReservationsBtn) {
+            releaseReservationsBtn.onclick = async () => {
+                const ok = confirm(
+                    '¿Liberar todas las reservas sin comprobante?\n\n' +
+                    'Se quitarán los apartados de talleres y visitas de usuarios que dieron ' +
+                    '"Completar Registro y Pagar" pero NO han finalizado con su comprobante.\n\n' +
+                    'Los registros ya finalizados no se tocan. Si alguien está justo ahora en la ' +
+                    'pantalla de pago, tendrá que volver a dar clic en "Completar Registro y Pagar".'
+                );
+                if (!ok) return;
+                try {
+                    const res = await adminFetch('php/api.php?action=release_temp_reservations', { method: 'POST' });
+                    const r = await res.json();
+                    if (!r.success) throw new Error(r.error || 'Error');
+                    alert(r.liberadas > 0
+                        ? `Se liberaron ${r.liberadas} reserva(s) y se recalcularon los cupos.`
+                        : 'No había reservas pendientes; los cupos se recalcularon.');
+                    renderItems();
+                } catch (e) {
+                    alert('No se pudieron liberar las reservas: ' + e.message);
+                }
+            };
+        }
+
         // --- Precios de registro (cuotas del congreso en cat_ajustes) ---
         // Cada compra guarda su total en el momento de registrarse, así que cambiar
         // aquí un precio NO altera lo que ya pagaron los registrados anteriores.
@@ -940,6 +970,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 downloadSvgBtn.style.display = 'none';
                 if (downloadRosterBtn) downloadRosterBtn.style.display = 'none';
+                if (releaseReservationsBtn) releaseReservationsBtn.style.display = 'none';
                 document.getElementById('searchBarWrapper').style.display = 'none';
                 document.getElementById('regSearchInput').value = '';
 
@@ -1689,7 +1720,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const lastGroup = groups[groups.length - 1];
                 const lastIsLoose = lastGroup && !lastGroup.some(d => d.reemplaza_id || chainRootsSet.has(Number(d.id)));
-                if (lastGroup && lastIsLoose && lastGroup[0]._spec.key === doc._spec.key && lastGroup[lastGroup.length - 1].estado === 'rechazado') {
+                // Un comprobante SOLO puede ser corrección de otro si pertenece a la
+                // misma compra (mismo concepto de pago). Antes, un comprobante de
+                // una compra nueva se pegaba como "versión" del anterior rechazado
+                // y lo dejaba bloqueado (no se podía rechazar definitivo).
+                const lastDoc = lastGroup ? lastGroup[lastGroup.length - 1] : null;
+                const mismaCompra = !lastDoc || doc._spec.key !== 'comprobante'
+                    || !doc.concepto_pago || !lastDoc.concepto_pago
+                    || doc.concepto_pago === lastDoc.concepto_pago;
+                if (lastGroup && lastIsLoose && lastGroup[0]._spec.key === doc._spec.key && lastDoc.estado === 'rechazado' && mismaCompra) {
                     lastGroup.push(doc);
                 } else {
                     groups.push([doc]);

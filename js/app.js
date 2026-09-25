@@ -15,6 +15,41 @@ document.addEventListener('DOMContentLoaded', () => {
         window.paymentConceptId = 0;
     }
 
+    // --- Cierre de sesión del usuario por inactividad (30 min, igual que el admin) ---
+    // Si alguien da "Completar Registro y Pagar" y deja la pestaña abierta sin
+    // finalizar, su apartado de talleres/visitas quedaría ocupado. Tras 30 min
+    // sin actividad se libera la reserva, se cierra la sesión y se regresa al
+    // inicio. (Coincide con la expiración de 30 min de las reservas en servidor.)
+    (function setupUserInactivityLogout() {
+        const LIMIT_MS = 30 * 60 * 1000;
+        let timer = null;
+        const logoutForInactivity = async () => {
+            const acc = JSON.parse(localStorage.getItem('tempAccount') || '{}');
+            if (!acc.email) return;
+            try {
+                await fetch('php/reserve_spots.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: acc.email, workshops: [], visits: [] })
+                });
+            } catch (e) {}
+            try {
+                localStorage.removeItem('tempAccount');
+                localStorage.removeItem('registrationDraft');
+            } catch (e) {}
+            alert('Tu sesión se cerró por inactividad (30 minutos). Los talleres o visitas que tenías apartados fueron liberados; vuelve a iniciar sesión para continuar.');
+            window.location.href = 'index.html';
+        };
+        const reset = () => {
+            if (timer) clearTimeout(timer);
+            if (!localStorage.getItem('tempAccount')) return;
+            timer = setTimeout(logoutForInactivity, LIMIT_MS);
+        };
+        ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
+            document.addEventListener(ev, reset, { passive: true }));
+        reset();
+    })();
+
     // Select ALL add-on checkboxes (Workshops, Visits, Contests)
     let addOnCheckboxes = [];
 
