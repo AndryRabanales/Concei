@@ -29,6 +29,22 @@ try {
         }
     }
 
+    // Modo "liberar": solo se QUITAN los ítems indicados de la reserva que ya
+    // existe, sin apartar nada nuevo. Lo usa la página cuando el usuario
+    // desmarca un taller/visita antes de la etapa de pago (p. ej. tras recargar
+    // la página con su selección restaurada), para que desmarcar libere siempre.
+    if (isset($data['release']) && is_array($data['release'])) {
+        $rel = array_map('strval', $data['release']);
+        $newWorkshops = array_values(array_diff($prevItems['workshops'], $rel));
+        $newVisits    = array_values(array_diff($prevItems['visits'], $rel));
+        if (!$prev) {
+            // No había reserva: nada que liberar.
+            $pdo->commit();
+            echo json_encode(['success' => true, 'released' => 0]);
+            exit;
+        }
+    }
+
     // 2. Guardar PRIMERO el nuevo estado de la reserva. Es importante hacerlo
     //    antes de recalcular: si se sincronizaba con la reserva anterior aún
     //    guardada, syncCapacity volvía a contar los ítems que el usuario acababa

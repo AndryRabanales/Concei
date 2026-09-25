@@ -1043,6 +1043,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     // casilla antes de eso NO aparta lugar (obs. WhatsApp: si todos
                     // marcan sin comprar, los talleres se llenaban en falso).
                     const pagoVisible = !document.getElementById('paymentRevealSection')?.classList.contains('hidden');
+
+                    // Desmarcar SIEMPRE libera: si la sección de pago no está visible
+                    // (p. ej. recargó la página y su selección se restauró) se quita
+                    // solo ese ítem de la reserva existente, sin apartar nada nuevo.
+                    // Obs. WhatsApp: "ya lo deseleccioné y el contador quedó reservado".
+                    if (email !== 'No proporcionado' && !pagoVisible && !cb.checked) {
+                        try {
+                            await fetch('php/reserve_spots.php', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ email, release: [cb.value] })
+                            });
+                        } catch (e) {}
+                    }
+
                     if (email !== 'No proporcionado' && pagoVisible) {
                         const purchasedIds = window.purchasedItemIds || [];
                         // Solo se reservan temporalmente los items NUEVOS; los ya comprados
