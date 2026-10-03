@@ -302,6 +302,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             <p style="margin:4px 0 0;font-size:0.8rem;color:rgba(255,255,255,0.6);">Folio: <strong style="color:#38bdf8;">${folio}</strong></p>
                         </div>
                         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <button type="button" id="userQrBtn" style="padding:8px 16px;border-radius:20px;background:rgba(56,189,248,0.18);border:1px solid rgba(56,189,248,0.6);color:#7dd3fc;font-weight:700;font-size:0.85rem;cursor:pointer;">
+                                <i class="fa-solid fa-qrcode"></i> Mi código QR
+                            </button>
                             <div style="padding:8px 16px;border-radius:20px;background:${sc.bg};border:1px solid ${sc.border};">
                                 <span style="font-weight:700;font-size:0.85rem;color:${sc.color};">${sc.label}</span>
                             </div>
@@ -314,6 +317,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Cerrar sesión: libera la reserva temporal (si la hubiera), limpia
                 // la sesión local y regresa al login.
                 setTimeout(() => {
+                    // Mi código QR: el participante lo muestra en la entrada de cada
+                    // evento; el staff lo escanea y queda registrado su pase.
+                    const qb = document.getElementById('userQrBtn');
+                    if (qb) qb.addEventListener('click', () => window.showMyQr(userEmail, folio));
+
                     const lb = document.getElementById('userLogoutBtn');
                     if (lb) lb.addEventListener('click', async () => {
                         try {
@@ -2347,6 +2355,80 @@ window.updateSummary = async function () {
 
     // Dynamic Payment Concept Update
     updatePaymentConcept();
+};
+
+// --- Mi código QR (pase de asistencia del participante) ---
+// Genera el QR con el folio firmado por el servidor y el logo del congreso al
+// centro. El participante lo muestra en la entrada; también puede dar su ID.
+window.showMyQr = async function (email, folio) {
+    if (typeof QRCode === 'undefined') {
+        alert('No se pudo cargar el generador de QR. Revisa tu conexión a internet y vuelve a intentarlo.');
+        return;
+    }
+    let info;
+    try {
+        const r = await fetch(`php/api.php?action=get_qr_payload&email=${encodeURIComponent(email)}&folio=${encodeURIComponent(folio)}&t=${Date.now()}`);
+        info = await r.json();
+        if (!info.success) throw new Error(info.error || 'Error');
+    } catch (e) {
+        alert('No se pudo generar tu código QR: ' + e.message);
+        return;
+    }
+
+    const old = document.getElementById('myQrOverlay');
+    if (old) old.remove();
+    const nombre = ((info.nombre || '') + ' ' + (info.apellido || '')).trim();
+    const safe = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    const ov = document.createElement('div');
+    ov.id = 'myQrOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.88);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;';
+    ov.innerHTML = `
+        <div style="background:white;border-radius:18px;padding:26px 22px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+            <p style="margin:0 0 4px;font-size:0.72rem;letter-spacing:1.5px;text-transform:uppercase;color:#64748b;font-weight:700;">ConCEI 2026 · Pase de asistencia</p>
+            <h3 style="margin:0 0 14px;color:#0f172a;font-size:1.15rem;line-height:1.3;">${safe(nombre)}</h3>
+            <canvas id="myQrCanvas" width="300" height="300" style="width:100%;max-width:300px;height:auto;border-radius:10px;border:1px solid #e2e8f0;"></canvas>
+            <div style="margin:12px 0 4px;font-family:monospace;font-size:1.7rem;font-weight:800;color:#1e3a8a;letter-spacing:2px;">ID ${safe(info.id)}</div>
+            <p style="margin:0 0 16px;font-size:0.85rem;color:#475569;line-height:1.4;">Muestra este código en la entrada de cada evento. Si la cámara no lo lee, da tu ID al personal.</p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+                <button type="button" id="myQrDownload" style="padding:10px 18px;border-radius:10px;border:none;background:#2563eb;color:white;font-weight:700;cursor:pointer;"><i class="fa-solid fa-download"></i> Guardar imagen</button>
+                <button type="button" id="myQrClose" style="padding:10px 18px;border-radius:10px;border:1px solid #cbd5e1;background:white;color:#334155;font-weight:700;cursor:pointer;">Cerrar</button>
+            </div>
+        </div>`;
+    document.body.appendChild(ov);
+
+    // QR con corrección de errores alta (H) para que el logo al centro no estorbe la lectura
+    const tmp = document.createElement('div');
+    new QRCode(tmp, { text: info.payload, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.H });
+    const canvas = document.getElementById('myQrCanvas');
+    const ctx = canvas.getContext('2d');
+    const paint = () => {
+        const src = tmp.querySelector('canvas') || tmp.querySelector('img');
+        if (!src) return;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 300, 300);
+        ctx.drawImage(src, 0, 0, 300, 300);
+        const logo = new Image();
+        logo.onload = () => {
+            const box = 64;
+            const scale = Math.min(box / logo.width, box / logo.height);
+            const w = logo.width * scale, h = logo.height * scale;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(150, 150, box / 2 + 7, 0, Math.PI * 2); ctx.fill();
+            ctx.drawImage(logo, 150 - w / 2, 150 - h / 2, w, h);
+        };
+        logo.src = 'images/logo-concei.png';
+    };
+    setTimeout(paint, 50);
+
+    document.getElementById('myQrClose').onclick = () => ov.remove();
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    document.getElementById('myQrDownload').onclick = () => {
+        const a = document.createElement('a');
+        a.download = `QR-CONCEI-${info.id}.png`;
+        a.href = canvas.toDataURL('image/png');
+        a.click();
+    };
 };
 
 window.updatePaymentConcept = function () {

@@ -408,6 +408,10 @@
                 <i class="fa-solid fa-tags"></i>
                 <span>Precios de Registro</span>
             </div>
+            <div class="menu-item" data-type="attendance">
+                <i class="fa-solid fa-qrcode"></i>
+                <span>Asistencia (QR)</span>
+            </div>
             <div class="menu-item" data-type="admins">
                 <i class="fa-solid fa-user-shield"></i>
                 <span>Administradores</span>
@@ -605,6 +609,7 @@
                 <button class="detail-tab-btn" onclick="switchDetailTab('payment')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-file-invoice-dollar"></i> Documentos y Pago</button>
                 <button class="detail-tab-btn" onclick="switchDetailTab('workshops')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-graduation-cap"></i> Talleres y Visitas</button>
                 <button class="detail-tab-btn" onclick="switchDetailTab('billing')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-file-invoice"></i> Facturación y Artículos</button>
+                <button class="detail-tab-btn" onclick="switchDetailTab('asistencia')" style="padding: 15px 20px; border: none; background: none; font-weight: 600; color: #475569; border-bottom: 3px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-qrcode"></i> Asistencia <span id="det-asist-count" style="background:#e2e8f0;color:#334155;border-radius:10px;padding:1px 8px;font-size:0.75rem;">0</span></button>
             </div>
 
             <div class="modal-body" style="padding: 30px; overflow-y: auto; flex-grow: 1; background: #fafafa;">
@@ -676,6 +681,13 @@
                 </div>
 
                 <!-- TAB 4: BILLING AND ARTICLES -->
+                <!-- TAB: ASISTENCIA (pases registrados con el QR del participante) -->
+                <div id="tab-asistencia" class="detail-tab-content" style="display: none;">
+                    <div id="det-asistencias" style="background: white; border-radius: 8px; border: 1px solid var(--border-color); padding: 15px;">
+                        <p style="color:#94a3b8;margin:0;">Cargando...</p>
+                    </div>
+                </div>
+
                 <div id="tab-billing" class="detail-tab-content" style="display: none;">
                     <div id="det-billing-section" style="margin-bottom: 25px;">
                         <h4 style="margin: 0 0 15px 0; color: #475569; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;"><i class="fa-solid fa-file-invoice"></i> Datos de Facturación</h4>
@@ -749,7 +761,9 @@
         </div>
     </div>
 
-    <script src="js/admin_v2.js?v=34"></script>
+    <!-- Lector de códigos QR con la cámara (vista Asistencia) -->
+    <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="js/admin_v2.js?v=35"></script>
 </body>
 
 </html>

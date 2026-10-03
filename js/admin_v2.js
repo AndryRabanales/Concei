@@ -636,6 +636,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const thead = document.querySelector('.data-table thead tr');
 
+            const attSec = document.getElementById('attendanceSectionContainer');
+            if (currentType === 'attendance') {
+                document.querySelector('.data-card').style.display = 'none';
+                if (adminSec) adminSec.style.display = 'none';
+                const ps = document.getElementById('pricesSectionContainer');
+                if (ps) ps.style.display = 'none';
+                openModalBtn.style.display = 'none';
+                toggleActiveBtn.style.display = 'none';
+                renderAttendanceSection();
+                return;
+            }
+            if (attSec) { attSec.style.display = 'none'; stopQrScanner(); }
+
             const pricesSec = document.getElementById('pricesSectionContainer');
             if (currentType === 'prices') {
                 document.querySelector('.data-card').style.display = 'none';
@@ -889,6 +902,169 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
+        // --- Asistencia por QR (escáner con cámara + captura manual por ID) ---
+        // Cada lectura registra un pase (fecha/hora) del participante. El QR es
+        // reutilizable; el servidor ignora lecturas repetidas en < 15 s.
+        let qrScanner = null;
+        let qrLastCode = '', qrLastAt = 0;
+
+        async function stopQrScanner() {
+            if (!qrScanner) return;
+            try { await qrScanner.stop(); } catch (e) {}
+            try { qrScanner.clear(); } catch (e) {}
+            qrScanner = null;
+            const b = document.getElementById('qrStartBtn');
+            if (b) { b.innerHTML = '<i class="fa-solid fa-camera"></i> Iniciar cámara'; b.dataset.on = '0'; }
+        }
+
+        async function startQrScanner() {
+            if (typeof Html5Qrcode === 'undefined') { alert('No se pudo cargar el lector de QR. Revisa la conexión a internet y recarga la página.'); return; }
+            if (!window.isSecureContext) { alert('La cámara solo funciona con https:// (o en localhost).'); return; }
+            try {
+                qrScanner = new Html5Qrcode('qrReader');
+                await qrScanner.start(
+                    { facingMode: 'environment' },
+                    { fps: 10, qrbox: { width: 240, height: 240 } },
+                    (text) => {
+                        const now = Date.now();
+                        if (text === qrLastCode && now - qrLastAt < 4000) return; // misma lectura seguida
+                        qrLastCode = text; qrLastAt = now;
+                        submitCheckin({ code: text });
+                    },
+                    () => {}
+                );
+                const b = document.getElementById('qrStartBtn');
+                if (b) { b.innerHTML = '<i class="fa-solid fa-stop"></i> Detener cámara'; b.dataset.on = '1'; }
+            } catch (e) {
+                qrScanner = null;
+                alert('No se pudo abrir la cámara: ' + (e && e.message ? e.message : e) + '\n\nRevisa que el navegador tenga permiso de cámara. Mientras tanto puedes registrar escribiendo el ID.');
+            }
+        }
+
+        async function submitCheckin(body) {
+            const res = document.getElementById('qrResult');
+            try {
+                const r = await adminFetch('php/api.php?action=register_checkin', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const d = await r.json();
+                if (!d.success) throw new Error(d.error || 'Error');
+                const nombre = esc(((d.nombre || '') + ' ' + (d.apellido || '')).trim());
+                res.innerHTML = `
+                    <div style="background:${d.duplicado ? '#fef9c3' : '#dcfce7'};border:2px solid ${d.duplicado ? '#facc15' : '#22c55e'};border-radius:14px;padding:26px 20px;text-align:center;">
+                        <div style="font-size:2.6rem;line-height:1;margin-bottom:10px;">${d.duplicado ? '🟡' : '✅'}</div>
+                        <div style="font-size:1.5rem;font-weight:800;color:#0f172a;line-height:1.25;">${nombre}</div>
+                        <div style="font-size:1.15rem;font-weight:700;color:${d.duplicado ? '#854d0e' : '#15803d'};margin-top:8px;">
+                            ${d.duplicado ? 'Ya se registró hace un momento' : 'Asistencia Registrada'}
+                        </div>
+                        <div style="margin-top:10px;font-size:0.85rem;color:#475569;">ID <strong style="font-family:monospace;">${esc(d.id)}</strong> · ${esc(d.hora)} · Pase #${d.total}${d.metodo === 'manual' ? ' · manual' : ''}</div>
+                    </div>`;
+                loadRecentCheckins();
+            } catch (e) {
+                res.innerHTML = `
+                    <div style="background:#fee2e2;border:2px solid #ef4444;border-radius:14px;padding:22px 20px;text-align:center;">
+                        <div style="font-size:2.2rem;line-height:1;margin-bottom:8px;">⛔</div>
+                        <div style="font-size:1.1rem;font-weight:700;color:#991b1b;">${esc(e.message)}</div>
+                    </div>`;
+            }
+        }
+
+        async function loadRecentCheckins() {
+            const box = document.getElementById('qrRecent');
+            if (!box) return;
+            try {
+                const r = await adminFetch(`php/api.php?action=get_all_checkins&limit=12&t=${Date.now()}`);
+                const d = await r.json();
+                const rows = d.checkins || [];
+                box.innerHTML = rows.length === 0
+                    ? '<p style="color:#94a3b8;margin:0;font-size:0.9rem;">Aún no hay pases registrados.</p>'
+                    : rows.map(c => `
+                        <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:0.88rem;">
+                            <span><span style="font-family:monospace;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;padding:1px 6px;margin-right:6px;">${esc(String(c.folio || '').slice(-4))}</span>${esc(((c.nombre || '') + ' ' + (c.apellido || '')).trim())}</span>
+                            <span style="color:#64748b;white-space:nowrap;">${esc(c.fecha_hora)}${c.metodo === 'manual' ? ' <i class="fa-solid fa-keyboard" title="Capturado a mano"></i>' : ''}</span>
+                        </div>`).join('');
+            } catch (e) { box.innerHTML = ''; }
+        }
+
+        async function downloadAttendanceCsv() {
+            try {
+                const r = await adminFetch(`php/api.php?action=get_all_checkins&t=${Date.now()}`);
+                const d = await r.json();
+                const rows = d.checkins || [];
+                const escCsv = v => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+                const lines = [['ID Registro', 'Nombre', 'Apellido', 'Fecha', 'Hora', 'Método', 'Registrado por'].map(escCsv).join(',')];
+                rows.forEach(c => {
+                    const [f, h] = String(c.fecha_hora || '').split(' ');
+                    lines.push([`="${String(c.folio || '').slice(-4)}"`, c.nombre || '', c.apellido || '', f || '', h || '', c.metodo || '', c.registrado_por || ''].map(escCsv).join(','));
+                });
+                if (rows.length === 0) lines.push('(Sin pases registrados)');
+                const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `concei_asistencia_${Date.now()}.csv`; a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) { alert('No se pudo generar el CSV: ' + e.message); }
+        }
+
+        function renderAttendanceSection() {
+            let sec = document.getElementById('attendanceSectionContainer');
+            if (!sec) {
+                sec = document.createElement('div');
+                sec.id = 'attendanceSectionContainer';
+                document.querySelector('.data-card').parentNode.appendChild(sec);
+                sec.innerHTML = `
+                    <div style="display:grid;grid-template-columns:minmax(280px,420px) 1fr;gap:24px;align-items:start;">
+                        <div class="data-card" style="margin:0;">
+                            <h3 style="margin:0 0 12px;font-size:1rem;"><i class="fa-solid fa-camera"></i> Lector de QR</h3>
+                            <div id="qrReader" style="width:100%;min-height:60px;border-radius:10px;overflow:hidden;background:#0f172a;"></div>
+                            <button class="btn-add" id="qrStartBtn" data-on="0" style="width:100%;justify-content:center;margin-top:12px;"><i class="fa-solid fa-camera"></i> Iniciar cámara</button>
+                            <p style="font-size:0.78rem;color:#64748b;margin:10px 0 0;">Funciona con la cámara de laptop, celular o tablet. El participante acerca su QR a la cámara.</p>
+
+                            <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;">
+                            <h3 style="margin:0 0 10px;font-size:1rem;"><i class="fa-solid fa-keyboard"></i> Registrar por ID</h3>
+                            <form id="qrManualForm" style="display:flex;gap:8px;">
+                                <input type="text" id="qrManualId" inputmode="numeric" placeholder="Ej. 0046" style="flex:1;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:1rem;font-family:monospace;">
+                                <button type="submit" class="btn-add" style="background:#0f766e;"><i class="fa-solid fa-check"></i> Registrar</button>
+                            </form>
+                            <p style="font-size:0.78rem;color:#64748b;margin:8px 0 0;">Por si la cámara no lee: el participante tiene su ID en su cuenta y en su QR.</p>
+                        </div>
+                        <div>
+                            <div id="qrResult" style="margin-bottom:18px;">
+                                <div style="background:white;border:2px dashed #cbd5e1;border-radius:14px;padding:30px 20px;text-align:center;color:#94a3b8;">
+                                    <i class="fa-solid fa-qrcode" style="font-size:2rem;"></i>
+                                    <div style="margin-top:8px;font-weight:600;">Esperando lectura…</div>
+                                </div>
+                            </div>
+                            <div class="data-card" style="margin:0;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <h3 style="margin:0;font-size:1rem;"><i class="fa-solid fa-clock-rotate-left"></i> Últimos pases</h3>
+                                    <button class="btn-add" id="qrCsvBtn" style="background:#0f766e;padding:8px 14px;font-size:0.85rem;"><i class="fa-solid fa-file-csv"></i> Descargar CSV de asistencia</button>
+                                </div>
+                                <div id="qrRecent"></div>
+                            </div>
+                        </div>
+                    </div>`;
+                document.getElementById('qrStartBtn').onclick = () => {
+                    const b = document.getElementById('qrStartBtn');
+                    if (b.dataset.on === '1') stopQrScanner(); else startQrScanner();
+                };
+                document.getElementById('qrManualForm').onsubmit = (ev) => {
+                    ev.preventDefault();
+                    const inp = document.getElementById('qrManualId');
+                    const v = inp.value.trim();
+                    if (!v) return;
+                    submitCheckin({ id: v });
+                    inp.value = ''; inp.focus();
+                };
+                document.getElementById('qrCsvBtn').onclick = downloadAttendanceCsv;
+                const mq = window.matchMedia('(max-width: 900px)');
+                const grid = sec.firstElementChild;
+                const applyMq = e => { grid.style.gridTemplateColumns = e.matches ? '1fr' : 'minmax(280px,420px) 1fr'; };
+                mq.addListener(applyMq); applyMq(mq);
+            }
+            sec.style.display = 'block';
+            loadRecentCheckins();
+        }
+
         // --- Precios de registro (cuotas del congreso en cat_ajustes) ---
         // Cada compra guarda su total en el momento de registrarse, así que cambiar
         // aquí un precio NO altera lo que ya pagaron los registrados anteriores.
@@ -992,6 +1168,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (currentType === 'admins') {
                     pageTitle.textContent = 'Gestión de Administradores';
                     pageDescription.textContent = 'Administra las cuentas de administrador y sus permisos de acceso.';
+                    openModalBtn.style.display = 'none';
+                } else if (currentType === 'attendance') {
+                    pageTitle.textContent = 'Asistencia (QR)';
+                    pageDescription.textContent = 'Escanea el código QR del participante o escribe su ID. Cada lectura registra un pase con fecha y hora.';
                     openModalBtn.style.display = 'none';
                 } else if (currentType === 'prices') {
                     pageTitle.textContent = 'Precios de Registro';
@@ -1567,6 +1747,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Action Button — opens document review modal
                 const btnAccept = document.getElementById('btnDetailAccept');
                 btnAccept.onclick = () => window.openDocReview(data.folio, (data.nombre || '') + ' ' + (data.apellido || ''));
+
+                // Pestaña Asistencia: pases registrados con el QR (fecha y hora)
+                const asistBox = document.getElementById('det-asistencias');
+                const asistCount = document.getElementById('det-asist-count');
+                if (asistBox) {
+                    asistBox.innerHTML = '<p style="color:#94a3b8;margin:0;">Cargando...</p>';
+                    adminFetch(`php/api.php?action=get_checkins&folio=${encodeURIComponent(data.folio)}&t=${Date.now()}`)
+                        .then(r => r.json())
+                        .then(d => {
+                            const rows = d.checkins || [];
+                            if (asistCount) asistCount.textContent = rows.length;
+                            asistBox.innerHTML = rows.length === 0
+                                ? '<p style="color:#94a3b8;margin:0;">Este participante aún no tiene pases de asistencia.</p>'
+                                : `<p style="margin:0 0 10px;font-weight:700;color:#1e293b;">${rows.length} pase(s) registrado(s)</p>` +
+                                  rows.map((c, i) => `
+                                    <div style="display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid #f1f5f9;font-size:0.92rem;">
+                                        <span style="color:#334155;"><strong>#${rows.length - i}</strong> · ${esc(String(c.fecha_hora || '').replace(' ', ' · '))}</span>
+                                        <span style="color:#64748b;font-size:0.82rem;">${c.metodo === 'manual' ? 'ID a mano' : 'QR'}${c.registrado_por ? ' · ' + esc(c.registrado_por) : ''}</span>
+                                    </div>`).join('');
+                        })
+                        .catch(() => { asistBox.innerHTML = '<p style="color:#b91c1c;margin:0;">No se pudieron cargar los pases.</p>'; });
+                }
 
                 detailModal.style.display = 'block';
 

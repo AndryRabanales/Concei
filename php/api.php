@@ -85,6 +85,13 @@ function resetEstatusManual($pdo, $correo) {
 
 // --- Seguridad: límite de intentos y sesiones de administrador ---
 const ADMIN_SESSION_TIMEOUT_MINUTES = 30;
+
+// --- Asistencia por QR ---
+// El QR de cada participante contiene su folio más una firma corta, para que
+// no se puedan inventar códigos con solo conocer el formato del folio.
+const QR_SECRET = 'concei-2026-asistencia-7f3a9c';
+function qrSignature($folio) { return substr(hash_hmac('sha256', strtoupper($folio), QR_SECRET), 0, 8); }
+function qrPayloadFor($folio) { return strtoupper($folio) . '-' . qrSignature($folio); }
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_WINDOW_MINUTES = 15;
 
@@ -428,6 +435,7 @@ switch ($action) {
                     d.tipo as regType, d.total, d.concepto as concept,
                     (SELECT GROUP_CONCAT(estado ORDER BY fecha_subida SEPARATOR ',') FROM reg_documentos doc WHERE doc.correo=r.correo AND doc.tipo_doc='comprobante')    as docs_comprobante,
                     (SELECT GROUP_CONCAT(estado ORDER BY fecha_subida SEPARATOR ',') FROM reg_documentos doc WHERE doc.correo=r.correo AND doc.tipo_doc='identificacion') as docs_identificacion,
+                    (SELECT COUNT(*) FROM reg_asistencias a WHERE a.correo=r.correo) as asistencias,
                     (SELECT GROUP_CONCAT(estado ORDER BY fecha_subida SEPARATOR ',') FROM reg_documentos doc WHERE doc.correo=r.correo AND doc.tipo_doc='constancia')     as docs_constancia,
                     (SELECT GROUP_CONCAT(concepto ORDER BY fecha_generado SEPARATOR '||') FROM reg_conceptos_historial h WHERE h.correo=r.correo) as conceptos_historial,
                     (SELECT GROUP_CONCAT(total ORDER BY fecha_generado SEPARATOR '||') FROM reg_conceptos_historial h WHERE h.correo=r.correo) as totales_historial
@@ -634,6 +642,99 @@ switch ($action) {
                 $folio
             ]);
             echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    // ===================== ASISTENCIA POR QR =====================
+    case 'get_qr_payload':
+        // Contenido del QR del participante (su folio firmado). Se valida que el
+        // folio pertenezca al correo con el que inició sesión.
+        try {
+            $email = trim($_GET['email'] ?? '');
+            $folio = trim($_GET['folio'] ?? '');
+            $st = $pdo->prepare("SELECT r.folio, p.nombre, p.apellido FROM reg_inscripciones r JOIN reg_personal p ON p.folio = r.folio WHERE r.correo = ? AND r.folio = ?");
+            $st->execute([$email, $folio]);
+            $row = $st->fetch();
+            if (!$row) { echo json_encode(['success' => false, 'error' => 'Registro no encontrado.']); break; }
+            echo json_encode(['success' => true, 'payload' => qrPayloadFor($row['folio']), 'folio' => $row['folio'],
+                              'id' => substr($row['folio'], -4), 'nombre' => $row['nombre'], 'apellido' => $row['apellido']]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'register_checkin':
+        // Registra un pase de asistencia. Recibe {code} leído del QR o {id}
+        // capturado a mano. Siempre deja un renglón nuevo (el QR es reutilizable),
+        // salvo lecturas repetidas de la misma persona en menos de 15 segundos.
+        $adm = requireAdmin($pdo);
+        $data = json_decode(file_get_contents('php://input'), true) ?: [];
+        try {
+            $code = trim($data['code'] ?? '');
+            $manualId = trim($data['id'] ?? '');
+            $metodo = 'qr';
+            if ($code !== '') {
+                if (!preg_match('/^(CONCEI-\d{4}-\d{4,})-([a-f0-9]{8})$/i', $code, $m)) throw new Exception('Este código QR no es del congreso.');
+                $folio = strtoupper($m[1]);
+                if (!hash_equals(qrSignature($folio), strtolower($m[2]))) throw new Exception('Código QR no válido.');
+            } elseif ($manualId !== '') {
+                $metodo = 'manual';
+                $num = (int)preg_replace('/\D/', '', $manualId);
+                if ($num <= 0) throw new Exception('Escribe el ID numérico del participante (ej. 0046).');
+                $folio = 'CONCEI-2026-' . str_pad($num, 4, '0', STR_PAD_LEFT);
+            } else {
+                throw new Exception('Falta el código QR o el ID.');
+            }
+            $st = $pdo->prepare("SELECT r.folio, r.correo, p.nombre, p.apellido FROM reg_inscripciones r JOIN reg_personal p ON p.folio = r.folio WHERE r.folio = ?");
+            $st->execute([$folio]);
+            $row = $st->fetch();
+            if (!$row) throw new Exception('No existe un participante con el ID ' . substr($folio, -4) . '.');
+
+            $st = $pdo->prepare("SELECT id FROM reg_asistencias WHERE correo = ? AND fecha_hora > NOW() - INTERVAL 15 SECOND ORDER BY id DESC LIMIT 1");
+            $st->execute([$row['correo']]);
+            $duplicado = (bool)$st->fetchColumn();
+            if (!$duplicado) {
+                $pdo->prepare("INSERT INTO reg_asistencias (correo, folio, metodo, registrado_por) VALUES (?, ?, ?, ?)")
+                    ->execute([$row['correo'], $row['folio'], $metodo, $adm['username'] ?? null]);
+            }
+            // Total y hora del último pase tomados de la BD (misma hora que verá
+            // el admin en el detalle y en el CSV, aunque PHP y MySQL tengan
+            // zonas horarias distintas).
+            $tot = $pdo->prepare("SELECT COUNT(*), TIME(MAX(fecha_hora)) FROM reg_asistencias WHERE correo = ?");
+            $tot->execute([$row['correo']]);
+            [$total, $hora] = $tot->fetch(PDO::FETCH_NUM);
+            echo json_encode(['success' => true, 'nombre' => $row['nombre'], 'apellido' => $row['apellido'], 'folio' => $row['folio'],
+                              'id' => substr($row['folio'], -4), 'total' => (int)$total, 'duplicado' => $duplicado,
+                              'hora' => $hora, 'metodo' => $metodo]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'get_checkins':
+        // Pases de un participante (pestaña Asistencia del detalle)
+        requireAdmin($pdo);
+        try {
+            $folio = $_GET['folio'] ?? '';
+            $st = $pdo->prepare("SELECT fecha_hora, metodo, registrado_por FROM reg_asistencias WHERE folio = ? ORDER BY fecha_hora DESC");
+            $st->execute([$folio]);
+            echo json_encode(['success' => true, 'checkins' => $st->fetchAll()]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'get_all_checkins':
+        // Todos los pases (CSV de asistencia y lista reciente del escáner)
+        requireAdmin($pdo);
+        try {
+            $limit = (int)($_GET['limit'] ?? 0);
+            $sql = "SELECT a.folio, p.nombre, p.apellido, a.fecha_hora, a.metodo, a.registrado_por
+                    FROM reg_asistencias a LEFT JOIN reg_personal p ON p.folio = a.folio
+                    ORDER BY a.fecha_hora DESC" . ($limit > 0 ? " LIMIT $limit" : "");
+            echo json_encode(['success' => true, 'checkins' => $pdo->query($sql)->fetchAll()]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
