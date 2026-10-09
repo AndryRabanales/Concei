@@ -727,14 +727,46 @@ switch ($action) {
         break;
 
     case 'get_all_checkins':
-        // Todos los pases (CSV de asistencia y lista reciente del escáner)
+        // Pases de asistencia. Con limit/offset devuelve una página (la lista del
+        // escáner, que de otro modo se vuelve interminable); sin limit, todos
+        // (CSV). "q" filtra por nombre o por ID/folio.
         requireAdmin($pdo);
         try {
-            $limit = (int)($_GET['limit'] ?? 0);
-            $sql = "SELECT a.folio, p.nombre, p.apellido, a.fecha_hora, a.metodo, a.registrado_por
-                    FROM reg_asistencias a LEFT JOIN reg_personal p ON p.folio = a.folio
-                    ORDER BY a.fecha_hora DESC" . ($limit > 0 ? " LIMIT $limit" : "");
-            echo json_encode(['success' => true, 'checkins' => $pdo->query($sql)->fetchAll()]);
+            $limit  = max(0, (int)($_GET['limit'] ?? 0));
+            $offset = max(0, (int)($_GET['offset'] ?? 0));
+            $q      = trim($_GET['q'] ?? '');
+            $where = ''; $params = [];
+            if ($q !== '') {
+                $where = "WHERE (CONCAT(COALESCE(p.nombre,''), ' ', COALESCE(p.apellido,'')) LIKE ? OR a.folio LIKE ?)";
+                $params = ['%' . $q . '%', '%' . $q . '%'];
+            }
+            $base = "FROM reg_asistencias a LEFT JOIN reg_personal p ON p.folio = a.folio $where";
+            $stT = $pdo->prepare("SELECT COUNT(*) $base");
+            $stT->execute($params);
+            $total = (int)$stT->fetchColumn();
+
+            $sql = "SELECT a.id, a.folio, p.nombre, p.apellido, a.fecha_hora, a.metodo, a.registrado_por
+                    $base ORDER BY a.fecha_hora DESC, a.id DESC" . ($limit > 0 ? " LIMIT $limit OFFSET $offset" : "");
+            $st = $pdo->prepare($sql);
+            $st->execute($params);
+            echo json_encode(['success' => true, 'checkins' => $st->fetchAll(), 'total' => $total]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        break;
+
+    case 'delete_checkin':
+        // Elimina UN pase de asistencia (botón de bote de basura). Sirve para
+        // limpiar los registros de prueba sin tocar el resto.
+        requireAdmin($pdo);
+        $data = json_decode(file_get_contents('php://input'), true) ?: [];
+        try {
+            $id = (int)($data['id'] ?? 0);
+            if ($id <= 0) throw new Exception('Registro no válido.');
+            $st = $pdo->prepare("DELETE FROM reg_asistencias WHERE id = ?");
+            $st->execute([$id]);
+            if ($st->rowCount() === 0) throw new Exception('Ese registro ya no existe.');
+            echo json_encode(['success' => true]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }

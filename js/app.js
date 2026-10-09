@@ -2387,7 +2387,7 @@ window.showMyQr = async function (email, folio) {
         <div style="background:white;border-radius:18px;padding:26px 22px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
             <p style="margin:0 0 4px;font-size:0.72rem;letter-spacing:1.5px;text-transform:uppercase;color:#64748b;font-weight:700;">ConCEI 2026 · Pase de asistencia</p>
             <h3 style="margin:0 0 14px;color:#0f172a;font-size:1.15rem;line-height:1.3;">${safe(nombre)}</h3>
-            <canvas id="myQrCanvas" width="300" height="300" style="width:100%;max-width:300px;height:auto;border-radius:10px;border:1px solid #e2e8f0;"></canvas>
+            <canvas id="myQrCanvas" width="360" height="360" style="width:100%;max-width:320px;height:auto;border-radius:10px;border:1px solid #e2e8f0;"></canvas>
             <div style="margin:12px 0 4px;font-family:monospace;font-size:1.7rem;font-weight:800;color:#1e3a8a;letter-spacing:2px;">ID ${safe(info.id)}</div>
             <p style="margin:0 0 16px;font-size:0.85rem;color:#475569;line-height:1.4;">Muestra este código en la entrada de cada evento. Si la cámara no lo lee, da tu ID al personal.</p>
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
@@ -2397,36 +2397,105 @@ window.showMyQr = async function (email, folio) {
         </div>`;
     document.body.appendChild(ov);
 
+    document.getElementById('myQrClose').onclick = () => ov.remove();
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+
     // QR con corrección de errores alta (H) para que el logo al centro no estorbe la lectura
     const tmp = document.createElement('div');
     new QRCode(tmp, { text: info.payload, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.H });
-    const canvas = document.getElementById('myQrCanvas');
-    const ctx = canvas.getContext('2d');
-    const paint = () => {
-        const src = tmp.querySelector('canvas') || tmp.querySelector('img');
-        if (!src) return;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, 300, 300);
-        ctx.drawImage(src, 0, 0, 300, 300);
-        const logo = new Image();
-        logo.onload = () => {
-            const box = 64;
-            const scale = Math.min(box / logo.width, box / logo.height);
-            const w = logo.width * scale, h = logo.height * scale;
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath(); ctx.arc(150, 150, box / 2 + 7, 0, Math.PI * 2); ctx.fill();
-            ctx.drawImage(logo, 150 - w / 2, 150 - h / 2, w, h);
-        };
-        logo.src = 'images/logo-concei.png';
-    };
-    setTimeout(paint, 50);
 
-    document.getElementById('myQrClose').onclick = () => ov.remove();
-    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    const esperarQr = () => new Promise(res => {
+        const t0 = Date.now();
+        const revisar = () => {
+            const src = tmp.querySelector('canvas') || tmp.querySelector('img');
+            if (src && (src.tagName !== 'IMG' || src.complete)) return res(src);
+            if (Date.now() - t0 > 5000) return res(null);
+            setTimeout(revisar, 50);
+        };
+        revisar();
+    });
+    const cargarLogo = () => new Promise(res => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => res(null);
+        img.src = 'images/logo-concei.png';
+    });
+    const [qrImg, logo] = await Promise.all([esperarQr(), cargarLogo()]);
+    if (!qrImg) { alert('No se pudo dibujar tu código QR. Vuelve a intentarlo.'); return; }
+
+    // Dibuja el QR SIEMPRE con su zona de silencio: el marco blanco alrededor que
+    // exige el estándar para que el lector encuentre los bordes. Sin él, al abrir
+    // la imagen en un visor de fondo oscuro el código deja de escanearse.
+    const dibujarQr = (x, px, py, lado, margen) => {
+        x.fillStyle = '#ffffff';
+        x.fillRect(px, py, lado + margen * 2, lado + margen * 2);
+        x.drawImage(qrImg, px + margen, py + margen, lado, lado);
+        if (logo) {
+            const caja = lado * 0.21;
+            const f = Math.min(caja / logo.width, caja / logo.height);
+            const w = logo.width * f, h = logo.height * f;
+            const cx = px + margen + lado / 2, cy = py + margen + lado / 2;
+            x.fillStyle = '#ffffff';
+            x.beginPath(); x.arc(cx, cy, caja / 2 + lado * 0.025, 0, Math.PI * 2); x.fill();
+            x.drawImage(logo, cx - w / 2, cy - h / 2, w, h);
+        }
+    };
+
+    const canvas = document.getElementById('myQrCanvas');
+    dibujarQr(canvas.getContext('2d'), 0, 0, 300, 30);
+
+    // Imagen para guardar: la tarjeta COMPLETA (fondo blanco, nombre, QR con su
+    // margen e ID), igual a lo que se ve en pantalla. Antes se bajaba el QR
+    // suelto y había que tomar captura para tener el nombre y el ID.
+    const construirTarjeta = () => {
+        const W = 760, M = 56, LADO = 450, QM = 40;
+        const fuenteNombre = '700 42px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        const medidor = document.createElement('canvas').getContext('2d');
+        medidor.font = fuenteNombre;
+        const renglones = [];
+        let linea = '';
+        nombre.split(/\s+/).filter(Boolean).forEach(p => {
+            const prueba = linea ? linea + ' ' + p : p;
+            if (linea && medidor.measureText(prueba).width > W - M * 2) { renglones.push(linea); linea = p; }
+            else linea = prueba;
+        });
+        if (linea) renglones.push(linea);
+
+        const yTitulo = M + 22;
+        const yNombre = yTitulo + 56;
+        const yQr = yNombre + (renglones.length - 1) * 52 + 24;
+        const yId = yQr + LADO + QM * 2 + 62;
+        const yPie = yId + 44;
+        const c = document.createElement('canvas');
+        c.width = W; c.height = yPie + 26 + M;
+        const x = c.getContext('2d');
+        x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height);
+        x.textAlign = 'center';
+
+        x.fillStyle = '#64748b';
+        x.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        x.fillText('CONCEI 2026 · PASE DE ASISTENCIA', W / 2, yTitulo);
+
+        x.fillStyle = '#0f172a';
+        x.font = fuenteNombre;
+        renglones.forEach((r, i) => x.fillText(r, W / 2, yNombre + i * 52));
+
+        dibujarQr(x, (W - LADO - QM * 2) / 2, yQr, LADO, QM);
+
+        x.fillStyle = '#1e3a8a';
+        x.font = '800 54px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        x.fillText('ID ' + info.id, W / 2, yId);
+
+        x.fillStyle = '#475569';
+        x.font = '400 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        x.fillText('Muestra este código en la entrada de cada evento.', W / 2, yPie);
+        return c;
+    };
+
     document.getElementById('myQrDownload').onclick = () => {
         const a = document.createElement('a');
         a.download = `QR-CONCEI-${info.id}.png`;
-        a.href = canvas.toDataURL('image/png');
+        a.href = construirTarjeta().toDataURL('image/png');
         a.click();
     };
 };

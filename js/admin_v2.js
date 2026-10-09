@@ -959,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div style="margin-top:10px;font-size:0.85rem;color:#475569;">ID <strong style="font-family:monospace;">${esc(d.id)}</strong> · ${esc(d.hora)} · Pase #${d.total}${d.metodo === 'manual' ? ' · manual' : ''}</div>
                     </div>`;
-                loadRecentCheckins();
+                attPage = 1; loadCheckins();
             } catch (e) {
                 res.innerHTML = `
                     <div style="background:#fee2e2;border:2px solid #ef4444;border-radius:14px;padding:22px 20px;text-align:center;">
@@ -969,21 +969,67 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        async function loadRecentCheckins() {
+        // La lista de pases se muestra por páginas y con buscador: al terminar un
+        // congreso son cientos de renglones y verlos todos de corrido es
+        // inmanejable. Cada renglón trae su bote de basura.
+        const ATT_POR_PAGINA = 10;
+        let attPage = 1, attQuery = '';
+
+        async function loadCheckins() {
             const box = document.getElementById('qrRecent');
             if (!box) return;
             try {
-                const r = await adminFetch(`php/api.php?action=get_all_checkins&limit=12&t=${Date.now()}`);
+                const offset = (attPage - 1) * ATT_POR_PAGINA;
+                const r = await adminFetch(`php/api.php?action=get_all_checkins&limit=${ATT_POR_PAGINA}&offset=${offset}&q=${encodeURIComponent(attQuery)}&t=${Date.now()}`);
                 const d = await r.json();
                 const rows = d.checkins || [];
+                const total = d.total || 0;
+                const paginas = Math.max(1, Math.ceil(total / ATT_POR_PAGINA));
+                if (attPage > paginas) { attPage = paginas; return loadCheckins(); }
+
+                const totalEl = document.getElementById('qrTotal');
+                if (totalEl) totalEl.textContent = total === 0 ? '' : `(${total} en total)`;
+
                 box.innerHTML = rows.length === 0
-                    ? '<p style="color:#94a3b8;margin:0;font-size:0.9rem;">Aún no hay pases registrados.</p>'
+                    ? `<p style="color:#94a3b8;margin:0;font-size:0.9rem;">${attQuery ? 'Sin resultados para esa búsqueda.' : 'Aún no hay pases registrados.'}</p>`
                     : rows.map(c => `
-                        <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:0.88rem;">
-                            <span><span style="font-family:monospace;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;padding:1px 6px;margin-right:6px;">${esc(String(c.folio || '').slice(-4))}</span>${esc(((c.nombre || '') + ' ' + (c.apellido || '')).trim())}</span>
-                            <span style="color:#64748b;white-space:nowrap;">${esc(c.fecha_hora)}${c.metodo === 'manual' ? ' <i class="fa-solid fa-keyboard" title="Capturado a mano"></i>' : ''}</span>
+                        <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:0.88rem;">
+                            <span style="font-family:monospace;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;padding:1px 6px;flex-shrink:0;">${esc(String(c.folio || '').slice(-4))}</span>
+                            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(((c.nombre || '') + ' ' + (c.apellido || '')).trim())}</span>
+                            <span style="color:#64748b;white-space:nowrap;">${esc(c.fecha_hora)}</span>
+                            <i class="fa-solid ${c.metodo === 'manual' ? 'fa-keyboard' : 'fa-qrcode'}" title="${c.metodo === 'manual' ? 'Capturado a mano' : 'Leído con la cámara'}" style="color:#94a3b8;flex-shrink:0;"></i>
+                            <button class="btn-icon btn-delete" data-del="${c.id}" title="Eliminar este registro" style="width:28px;height:28px;flex-shrink:0;"><i class="fa-solid fa-trash" style="font-size:0.8rem;"></i></button>
                         </div>`).join('');
+
+                box.querySelectorAll('button[data-del]').forEach(b => {
+                    b.onclick = () => borrarCheckin(b.dataset.del, b.closest('div').innerText.replace(/\s+/g, ' ').trim());
+                });
+
+                const pager = document.getElementById('qrPager');
+                if (pager) {
+                    pager.innerHTML = paginas <= 1 ? '' : `
+                        <button class="btn-cancel" id="qrPrev" ${attPage === 1 ? 'disabled' : ''} style="padding:6px 12px;${attPage === 1 ? 'opacity:0.45;cursor:not-allowed;' : ''}"><i class="fa-solid fa-chevron-left"></i></button>
+                        <span style="font-size:0.85rem;color:#64748b;">Página ${attPage} de ${paginas}</span>
+                        <button class="btn-cancel" id="qrNext" ${attPage === paginas ? 'disabled' : ''} style="padding:6px 12px;${attPage === paginas ? 'opacity:0.45;cursor:not-allowed;' : ''}"><i class="fa-solid fa-chevron-right"></i></button>`;
+                    const prev = document.getElementById('qrPrev'), next = document.getElementById('qrNext');
+                    if (prev) prev.onclick = () => { if (attPage > 1) { attPage--; loadCheckins(); } };
+                    if (next) next.onclick = () => { if (attPage < paginas) { attPage++; loadCheckins(); } };
+                }
             } catch (e) { box.innerHTML = ''; }
+        }
+
+        async function borrarCheckin(id, descripcion) {
+            if (!confirm(`¿Eliminar este registro de asistencia?\n\n${descripcion}\n\nEsta acción no se puede deshacer.`)) return;
+            try {
+                const r = await adminFetch('php/api.php?action=delete_checkin', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: Number(id) })
+                });
+                const d = await r.json();
+                if (!d.success) throw new Error(d.error || 'Error');
+                loadCheckins();
+            } catch (e) {
+                alert('No se pudo eliminar el registro: ' + e.message);
+            }
         }
 
         async function downloadAttendanceCsv() {
@@ -1035,11 +1081,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </div>
                             </div>
                             <div class="data-card" style="margin:0;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-                                    <h3 style="margin:0;font-size:1rem;"><i class="fa-solid fa-clock-rotate-left"></i> Últimos pases</h3>
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+                                    <h3 style="margin:0;font-size:1rem;"><i class="fa-solid fa-clock-rotate-left"></i> Pases registrados <span id="qrTotal" style="color:#64748b;font-weight:500;font-size:0.85rem;"></span></h3>
                                     <button class="btn-add" id="qrCsvBtn" style="background:#0f766e;padding:8px 14px;font-size:0.85rem;"><i class="fa-solid fa-file-csv"></i> Descargar CSV de asistencia</button>
                                 </div>
+                                <div style="position:relative;margin-bottom:10px;">
+                                    <i class="fa-solid fa-magnifying-glass" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:0.85rem;"></i>
+                                    <input type="text" id="qrSearch" placeholder="Buscar por nombre o ID..." style="width:100%;padding:9px 12px 9px 34px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.9rem;font-family:inherit;box-sizing:border-box;outline:none;">
+                                </div>
                                 <div id="qrRecent"></div>
+                                <div id="qrPager" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:12px;"></div>
                             </div>
                         </div>
                     </div>`;
@@ -1056,13 +1107,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     inp.value = ''; inp.focus();
                 };
                 document.getElementById('qrCsvBtn').onclick = downloadAttendanceCsv;
+                let tBusq = null;
+                document.getElementById('qrSearch').oninput = (ev) => {
+                    clearTimeout(tBusq);
+                    const v = ev.target.value.trim();
+                    tBusq = setTimeout(() => { attQuery = v; attPage = 1; loadCheckins(); }, 300);
+                };
                 const mq = window.matchMedia('(max-width: 900px)');
                 const grid = sec.firstElementChild;
                 const applyMq = e => { grid.style.gridTemplateColumns = e.matches ? '1fr' : 'minmax(280px,420px) 1fr'; };
                 mq.addListener(applyMq); applyMq(mq);
             }
             sec.style.display = 'block';
-            loadRecentCheckins();
+            loadCheckins();
         }
 
         // --- Precios de registro (cuotas del congreso en cat_ajustes) ---
